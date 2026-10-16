@@ -19,7 +19,7 @@ from app.config import settings
 from app.db.init_db import initialize_database
 from app.db.collections import COLLECTION_USERS, COLLECTION_VIOLATIONS
 
-TEST_DB_NAME = "test_trafficguard_integration_db"
+TEST_DB_NAME = "test_trafficguard_isolated_integration_db"
 
 
 def _is_mongodb_available() -> bool:
@@ -37,34 +37,35 @@ def _is_mongodb_available() -> bool:
         return False
 
 
-@pytest.mark.skipif(
-    not _is_mongodb_available(),
-    reason="[INTEGRATION TEST SKIPPED] Live MongoDB instance is not reachable at "
-           f"'{settings.MONGO_URI}'. Start MongoDB locally or provide valid MONGO_URI to run."
-)
+@pytest.fixture(scope="module")
+def live_test_db():
+    """Initializes a clean isolated test database and drops it after module tests finish."""
+    if not _is_mongodb_available():
+        pytest.skip(
+            f"Live MongoDB instance is not reachable at '{settings.MONGO_URI}'. "
+            "Start MongoDB locally to run live integration tests."
+        )
+
+    client = MongoClient(settings.MONGO_URI, tz_aware=True)
+    test_db = client[TEST_DB_NAME]
+    client.drop_database(TEST_DB_NAME)
+
+    # Run full initialization
+    report = initialize_database(db=test_db)
+    assert report["success"] is True
+
+    yield test_db
+
+    # Clean up only the isolated test database
+    client.drop_database(TEST_DB_NAME)
+    client.close()
+
+
 class TestLiveMongoIntegration:
     """Live integration tests requiring an actual running MongoDB server."""
 
-    @pytest.fixture(scope="class", autouse=True)
-    def setup_and_teardown_test_db(self):
-        """Initializes a clean test database and tears it down after tests finish."""
-        client = MongoClient(settings.MONGO_URI, tz_aware=True)
-        test_db = client[TEST_DB_NAME]
-        client.drop_database(TEST_DB_NAME)
-
-        # Run full initialization
-        report = initialize_database(db=test_db)
-        assert report["success"] is True
-
-        yield test_db
-
-        # Clean up test database
-        client.drop_database(TEST_DB_NAME)
-        client.close()
-
-    def test_live_schema_rejects_invalid_enum(self, setup_and_teardown_test_db):
+    def test_live_schema_rejects_invalid_enum(self, live_test_db):
         """Live MongoDB JSON Schema validator must reject invalid violationType enum."""
-        test_db = setup_and_teardown_test_db
         invalid_doc = {
             "cameraId": ObjectId(),
             "capturedAt": datetime.now(timezone.utc),
@@ -79,12 +80,11 @@ class TestLiveMongoIntegration:
             "updatedAt": datetime.now(timezone.utc),
         }
         with pytest.raises(WriteError) as exc_info:
-            test_db[COLLECTION_VIOLATIONS].insert_one(invalid_doc)
+            live_test_db[COLLECTION_VIOLATIONS].insert_one(invalid_doc)
         assert "Document failed validation" in str(exc_info.value)
 
-    def test_live_unique_index_enforces_unique_email(self, setup_and_teardown_test_db):
+    def test_live_unique_index_enforces_unique_email(self, live_test_db):
         """Live MongoDB unique index must reject duplicate employee email."""
-        test_db = setup_and_teardown_test_db
         user1 = {
             "employeeId": "TG-EMP-1001",
             "name": "Officer One",
@@ -95,7 +95,7 @@ class TestLiveMongoIntegration:
             "createdAt": datetime.now(timezone.utc),
             "updatedAt": datetime.now(timezone.utc),
         }
-        test_db[COLLECTION_USERS].insert_one(user1)
+        live_test_db[COLLECTION_USERS].insert_one(user1)
 
         user2 = {
             "employeeId": "TG-EMP-1002",
@@ -108,4 +108,4 @@ class TestLiveMongoIntegration:
             "updatedAt": datetime.now(timezone.utc),
         }
         with pytest.raises(DuplicateKeyError):
-            test_db[COLLECTION_USERS].insert_one(user2)
+            live_test_db[COLLECTION_USERS].insert_one(user2)

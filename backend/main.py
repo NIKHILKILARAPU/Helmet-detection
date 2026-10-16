@@ -24,9 +24,15 @@ from app.schemas.common import (
     DatabaseHealthStatus,
     ApiResponse,
 )
+from app.api.auth import router as auth_router
 from app.api.violations import router as violations_router
 from app.api.stats import router as stats_router
 from app.api.camera import router as camera_router
+from app.api.persons import router as persons_router
+from app.api.vehicles import router as vehicles_router
+from app.api.settings import router as settings_router
+from app.api.operations import router as operations_router
+from app.api.audit import router as audit_router
 from app.models.yolo_inference import yolo_engine
 
 
@@ -129,9 +135,15 @@ async def db_readiness_probe():
 
 
 # Register API routers
+app.include_router(auth_router, prefix=settings.API_PREFIX)
 app.include_router(violations_router, prefix=settings.API_PREFIX)
 app.include_router(stats_router, prefix=settings.API_PREFIX)
 app.include_router(camera_router, prefix=settings.API_PREFIX)
+app.include_router(persons_router, prefix=settings.API_PREFIX)
+app.include_router(vehicles_router, prefix=settings.API_PREFIX)
+app.include_router(settings_router, prefix=settings.API_PREFIX)
+app.include_router(operations_router, prefix=settings.API_PREFIX)
+app.include_router(audit_router, prefix=settings.API_PREFIX)
 
 
 if __name__ == "__main__":

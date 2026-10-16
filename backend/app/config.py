@@ -24,6 +24,14 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5173"
     ]
     
+    # Authentication & Security
+    SECRET_KEY: str = Field(
+        default="development_trafficguard_super_secret_key_change_in_production_32b",
+        description="JWT cryptographic signing key"
+    )
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 480  # 8 hours shift length
+    
     # AI Model Path (Kept strictly outside frontend)
     YOLO_MODEL_PATH: str = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "../../../models/yolov8n-traffic.pt")
