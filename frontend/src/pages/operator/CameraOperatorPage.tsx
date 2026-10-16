@@ -14,7 +14,7 @@ import { useApp } from '../../context';
 import { cameraService } from '../../services/cameraService';
 import type { CameraDevice } from '../../services/cameraService';
 
-export const CameraOperatorView: React.FC = () => {
+export const CameraOperatorPage: React.FC = () => {
   const { addNewCapturedCase, addToast } = useApp();
 
   const videoRef = useRef<HTMLVideoElement>(null);

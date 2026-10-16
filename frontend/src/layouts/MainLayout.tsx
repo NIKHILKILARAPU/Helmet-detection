@@ -1,14 +1,15 @@
 import React, { useState } from 'react';
-import { AppProvider, useApp } from './context';
-import { Header } from './components/common/Header';
-import { Sidebar } from './components/common/Sidebar';
-import { ToastContainer } from './components/common/ToastContainer';
-import { AdminDashboard } from './components/admin/AdminDashboard';
-import { ReviewerQueue } from './components/reviewer/ReviewerQueue';
-import { CameraOperatorView } from './components/operator/CameraOperatorView';
-import { SupervisorDashboard } from './components/supervisor/SupervisorDashboard';
+import type { ReactNode } from 'react';
+import { useApp } from '../context';
+import { Header } from '../components/common/Header';
+import { Sidebar } from '../components/common/Sidebar';
+import { ToastContainer } from '../components/common/ToastContainer';
 
-const AppLayout: React.FC = () => {
+interface MainLayoutProps {
+  children: ReactNode;
+}
+
+export const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
   const { currentRole } = useApp();
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
@@ -60,10 +61,7 @@ const AppLayout: React.FC = () => {
         {/* Scrollable Page Canvas */}
         <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
           <div className="max-w-7xl mx-auto">
-            {currentRole === 'admin' && <AdminDashboard />}
-            {currentRole === 'reviewer' && <ReviewerQueue />}
-            {currentRole === 'operator' && <CameraOperatorView />}
-            {currentRole === 'supervisor' && <SupervisorDashboard />}
+            {children}
           </div>
         </main>
       </div>
@@ -73,13 +71,3 @@ const AppLayout: React.FC = () => {
     </div>
   );
 };
-
-export function App() {
-  return (
-    <AppProvider>
-      <AppLayout />
-    </AppProvider>
-  );
-}
-
-export default App;

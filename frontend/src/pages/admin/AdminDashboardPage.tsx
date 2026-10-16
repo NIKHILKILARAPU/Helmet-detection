@@ -19,15 +19,15 @@ import {
   Save
 } from 'lucide-react';
 import { useApp } from '../../context';
-import { StatCard } from '../common/StatCard';
-import { StatusBadge } from '../common/StatusBadge';
-import { HourlyDistributionChart, MonthlyTrendChart } from '../common/SimpleChart';
-import { Modal } from '../common/Modal';
-import { EvidenceViewer } from '../common/EvidenceViewer';
+import { StatCard } from '../../components/common/StatCard';
+import { StatusBadge } from '../../components/common/StatusBadge';
+import { HourlyDistributionChart, MonthlyTrendChart } from '../../components/common/SimpleChart';
+import { Modal } from '../../components/common/Modal';
+import { EvidenceViewer } from '../../components/common/EvidenceViewer';
 import type { ViolationCase, RegisteredPerson, CameraSourceRecord } from '../../types';
 import { INITIAL_DASHBOARD_STATS } from '../../data/mockData';
 
-export const AdminDashboard: React.FC = () => {
+export const AdminDashboardPage: React.FC = () => {
   const { 
     cases, 
     persons, 

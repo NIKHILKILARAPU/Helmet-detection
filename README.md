@@ -6,6 +6,61 @@ Built for government traffic command centers and engineered to run with minimal 
 
 ---
 
+## 📁 Repository Organization
+
+The repository has been restructured into dedicated, self-contained directories separating the user interface, backend API service, AI model weights, and datasets:
+
+```text
+Helmet-detetection/
+├── frontend/                     # React 19 + Vite 8 + TypeScript + Tailwind CSS UI
+│   ├── public/                   # Static assets & icons
+│   ├── src/
+│   │   ├── assets/               # Branding images & illustrations
+│   │   ├── components/           # Reusable UI components & common widgets
+│   │   │   ├── common/           # Header, Sidebar, StatCard, StatusBadge, etc.
+│   │   │   └── index.ts          # Barrel export
+│   │   ├── context/              # AppContext state & role provider
+│   │   ├── hooks/                # Custom React hooks (useCamera, useViolations)
+│   │   ├── layouts/              # MainLayout wrapper (navigation + drawer + toasts)
+│   │   ├── pages/                # Role-specific government enforcement views
+│   │   │   ├── admin/            # Government Admin dashboard & policy management
+│   │   │   ├── reviewer/         # Traffic Officer review queue & evidence triage
+│   │   │   ├── operator/         # Camera Operator live stream & snapshot analysis
+│   │   │   └── supervisor/       # Supervisory Officer compliance analytics & audit
+│   │   ├── services/             # API services & mock fallback layer
+│   │   ├── types/                # TypeScript interfaces & domain models
+│   │   ├── utils/                # High-fidelity SVG mock evidence generator
+│   │   ├── App.tsx               # Root application shell
+│   │   └── main.tsx              # Application entrypoint
+│   ├── .env.example              # Frontend environment template (VITE_API_BASE_URL)
+│   ├── .oxlintrc.json            # Fast Rust-based linter configuration
+│   ├── package.json              # Frontend npm dependencies and scripts
+│   ├── tsconfig.json             # TypeScript project configuration
+│   └── vite.config.ts            # Vite 8 + Tailwind CSS v4 build setup
+│
+├── backend/                      # Python FastAPI backend & AI inference service
+│   ├── app/
+│   │   ├── api/                  # REST endpoints (violations, stats, camera, health)
+│   │   ├── models/               # YOLOv8 inference boundary & detection pipeline
+│   │   └── config.py             # App settings & environment loader
+│   ├── .env.example              # Backend environment template (DB, port, weights)
+│   ├── main.py                   # FastAPI application entrypoint with CORS
+│   ├── requirements.txt          # Python dependencies (FastAPI, Uvicorn, PyMongo, Ultralytics)
+│   └── README.md                 # Backend setup and execution instructions
+│
+├── models/                       # AI model weights storage (kept outside frontend)
+│   └── README.md                 # Instructions for placing yolov8n-traffic.pt
+│
+├── datasets/                     # Training & evaluation datasets (kept outside frontend)
+│   └── README.md                 # Dataset format and annotation guidelines
+│
+├── .gitignore                    # Excludes node_modules, dist, venv, .env, and weights
+├── package.json                  # Root convenience scripts (delegates to frontend)
+└── README.md                     # Comprehensive project documentation
+```
+
+---
+
 ## 🚦 System Architecture & Government Role Interfaces
 
 The application features a single-page responsive interface equipped with a **Development Demo Mode Role Switcher** located in the top navigation bar and sidebar footer. This enables complete evaluation of all four government enforcement roles:
@@ -72,44 +127,88 @@ Built strictly following government enforcement design standards:
 
 ---
 
-## 💻 Tech Stack & Performance
+## ⚡ Exact Run Commands
 
-* **Framework:** React 19 + TypeScript (Strict `verbatimModuleSyntax` enabled)
-* **Build Tool:** Vite 8 (Sub-2 second production builds, sub-300ms HMR)
-* **Styling:** Tailwind CSS v4 via `@tailwindcss/vite`
-* **Icons:** Lucide React (`lucide-react`)
-* **Charts:** Zero-dependency SVG chart components (low memory footprint, zero canvas overhead)
-* **Linter:** Oxlint (0 errors, 0 warnings across all files)
+### Method A: From Repository Root (Convenience Scripts)
+
+```bash
+# 1. Install frontend dependencies
+npm run install:frontend
+
+# 2. Launch Vite dev server
+npm run dev
+
+# 3. Run linting & type checks
+npm run lint
+npm run build
+```
+
+### Method B: Directly Inside `frontend/`
+
+```bash
+cd frontend
+
+# Install dependencies
+npm install
+
+# Start development server
+npm run dev
+# Server starts at http://localhost:5173
+
+# Linting and build verification
+npm run lint
+npm run build
+```
+
+### Method C: Starting the Python FastAPI Backend (`backend/`)
+
+```bash
+cd backend
+
+# Create virtual environment
+python -m venv venv
+
+# Activate virtual environment
+# Windows (PowerShell):
+.\venv\Scripts\Activate.ps1
+# Windows (CMD):
+.\venv\Scripts\activate.bat
+# Linux/macOS:
+source venv/bin/activate
+
+# Install requirements
+pip install -r requirements.txt
+
+# Copy environment template
+copy .env.example .env
+
+# Start FastAPI server
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+# API docs available at http://localhost:8000/docs
+```
 
 ---
 
-## 🚀 Quickstart & Running Instructions
+## ⚙️ Environment Variables
 
-### Prerequisites
-* Node.js v18+ (tested on Node v22.19.0)
-* npm v9+
+### Frontend (`frontend/.env`)
+Create a `.env` file inside `frontend/` by copying `frontend/.env.example`:
+```env
+# Base URL for the FastAPI backend API
+VITE_API_BASE_URL=http://localhost:8000/api/v1
 
-### 1. Install Dependencies
-```bash
-npm install
+# Application environment
+VITE_APP_ENV=development
 ```
+> **Security Rule**: Never prefix backend secrets or database credentials with `VITE_`. Any variable starting with `VITE_` is bundled into the client build.
 
-### 2. Start Development Server
-```bash
-npm run dev
-```
-Open [http://localhost:5173](http://localhost:5173) in your browser.
-
-### 3. Verify Code Quality & Type Checks
-```bash
-# Run static linter
-npm run lint
-
-# Production build test
-npm run build
-
-# Preview production build locally
-npm run preview
+### Backend (`backend/.env`)
+Create a `.env` file inside `backend/` by copying `backend/.env.example`:
+```env
+MONGODB_URI=mongodb://localhost:27017
+DATABASE_NAME=trafficguard_ai
+MODEL_WEIGHTS_PATH=../models/yolov8n-traffic.pt
+CORS_ORIGINS=http://localhost:5173,http://localhost:3000
 ```
 
 ---

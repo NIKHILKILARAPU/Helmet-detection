@@ -11,12 +11,12 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context';
 import type { ViolationStatus } from '../../types';
-import { EvidenceViewer } from '../common/EvidenceViewer';
-import { StatusBadge } from '../common/StatusBadge';
-import { ConfirmationDialog } from '../common/ConfirmationDialog';
-import { EmptyState } from '../common/EmptyState';
+import { EvidenceViewer } from '../../components/common/EvidenceViewer';
+import { StatusBadge } from '../../components/common/StatusBadge';
+import { ConfirmationDialog } from '../../components/common/ConfirmationDialog';
+import { EmptyState } from '../../components/common/EmptyState';
 
-export const ReviewerQueue: React.FC = () => {
+export const ReviewerQueuePage: React.FC = () => {
   const { cases, approveDraft, rejectCase } = useApp();
 
   const [activeTab, setActiveTab] = useState<ViolationStatus | 'ALL'>('PENDING_REVIEW');

@@ -12,11 +12,11 @@ import {
   Search 
 } from 'lucide-react';
 import { useApp } from '../../context';
-import { StatCard } from '../common/StatCard';
-import { HourlyDistributionChart, MonthlyTrendChart } from '../common/SimpleChart';
+import { StatCard } from '../../components/common/StatCard';
+import { HourlyDistributionChart, MonthlyTrendChart } from '../../components/common/SimpleChart';
 import { INITIAL_DASHBOARD_STATS } from '../../data/mockData';
 
-export const SupervisorDashboard: React.FC = () => {
+export const SupervisorDashboardPage: React.FC = () => {
   const { 
     cases, 
     cameraSources, 
