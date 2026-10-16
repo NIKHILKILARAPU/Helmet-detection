@@ -38,27 +38,27 @@ export const Header: React.FC<HeaderProps> = ({
   const rolesList: { id: UserRole; label: string; icon: React.ReactNode; desc: string }[] = [
     {
       id: 'admin',
-      label: 'Admin Dashboard',
+      label: 'Government Admin',
       icon: <Users className="w-4 h-4 text-indigo-600" />,
-      desc: 'Enforcement metrics, trends, person directory, system health'
+      desc: 'Staff, roles, camera sources, authorized registry, policy settings'
     },
     {
       id: 'reviewer',
-      label: 'Reviewer / Management',
+      label: 'Traffic Officer / Reviewer',
       icon: <FileCheck className="w-4 h-4 text-blue-600" />,
-      desc: 'Review candidate queue, inspect bounding boxes, approve draft'
+      desc: 'Inspect evidence, verify registry match, add notes, sanction draft'
     },
     {
       id: 'operator',
       label: 'Camera Operator',
       icon: <Camera className="w-4 h-4 text-emerald-600" />,
-      desc: 'Webcam feed, live snapshots, AI demo pipeline test'
+      desc: 'Webcam/CCTV sources, frame capture, AI edge candidate monitoring'
     },
     {
-      id: 'citizen',
-      label: 'Registered-Person Portal',
-      icon: <Laptop className="w-4 h-4 text-amber-600" />,
-      desc: 'Plain language view, linked vehicles, dispute submission'
+      id: 'supervisor',
+      label: 'Supervisory Officer',
+      icon: <Laptop className="w-4 h-4 text-purple-600" />,
+      desc: 'Executive analytics, officer activity, camera health, audit logs'
     }
   ];
 

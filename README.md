@@ -1,66 +1,68 @@
-# TrafficGuard AI — Smart Helmet Detection & E-Challan Management System
+# TrafficGuard AI — Government Traffic Enforcement System
 
-TrafficGuard AI is a modern, lightweight, accessible web frontend designed for automated roadside helmet compliance monitoring, candidate violation triage, and human-verified e-challan draft preparation.
+TrafficGuard AI is an official government-grade web application designed for municipal and state traffic police departments. It provides automated roadside helmet compliance monitoring, candidate violation triage, camera network management, and human-verified e-challan draft preparation.
 
-Built as an engineering final year project (B.Tech) and engineered to run with minimal memory and instant dev-server boot on everyday hardware (such as Intel Core i5 with 8 GB RAM).
+Built for government traffic command centers and engineered to run with minimal memory and fast startup on standard department hardware (such as Intel Core i5 with 8 GB RAM).
 
 ---
 
-## 🚦 System Architecture & Role Interfaces
+## 🚦 System Architecture & Government Role Interfaces
 
-The application features a single-page responsive interface equipped with a **Development Demo Mode Role Switcher** located in the top navigation bar and sidebar footer. This enables complete evaluation of all four project personas without requiring separate authentication servers during grading and live demonstrations:
+The application features a single-page responsive interface equipped with a **Development Demo Mode Role Switcher** located in the top navigation bar and sidebar footer. This enables complete evaluation of all four government enforcement roles:
 
 ```
-[Camera Streams / Webcam] ──► [AI Inference Boundary] ──► [Candidate Detection Ingestion]
-                                                                     │
-       ┌─────────────────────────────────────────────────────────────┴────────────────────────┐
-       ▼                                                                                      ▼
-[1. Admin Dashboard]                                                               [2. Reviewer Desk]
-- Enforcement KPI metrics & today scans                                            - Queue triage (Pending, Drafts, Rejected)
-- Hourly & monthly SVG compliance trends                                           - Evidence viewer with bounding boxes overlay
-- Registered Citizen & Vehicle directory                                            - Approve CHALLAN_DRAFT (No fine issued)
-- Staff user role management                                                       - Reject with mandatory audit reason
-- Real-time API & database health telemetry                                        - Immutable audit history timeline
-       ▲                                                                                      ▲
-       │                                                                                      │
-[4. Registered-Person Portal]                                                      [3. Camera Operator View]
-- Plain language, citizen-accessible design                                        - Live laptop webcam stream via MediaDevices
-- Linked vehicle records (State Vahan DB)                                          - Clean stream lifecycle (stop on unmount)
-- Observation notice history & evidence inspect                                     - Frame snapshot & candidate pipeline test
-- Report Mismatch / dispute review submission                                      - Detection outcome panel & telemetry
+[Camera Streams / Webcam] ──► [AI Edge Inference Boundary] ──► [Candidate Detection Ingestion]
+                                                                        │
+       ┌────────────────────────────────────────────────────────────────┴────────────────────────┐
+       ▼                                                                                         ▼
+[1. Government Admin]                                                               [2. Traffic Officer / Reviewer]
+- Manages personnel, staff roles & permissions                                      - Queue triage (Pending, Drafts, Rejected)
+- Camera Network Sources (RTSP, CCTV, Webcams)                                      - Evidence viewer with bounding boxes overlay
+- State Vehicle Registry (Vahan DB records)                                         - Verifies authorized registration records
+- Policy settings (confidence, penalties, retention)                                - Approves CHALLAN_DRAFT (No auto-fine)
+- Infrastructure telemetry (FastAPI, MongoDB, YOLO)                                 - Rejection workflow with mandatory audit reasons
+       ▲                                                                                         ▲
+       │                                                                                         │
+[4. Management / Supervisory Officer]                                               [3. Camera Operator]
+- Executive compliance analytics & KPIs                                             - Live webcam stream via MediaDevices API
+- Officer review productivity & shift tracking                                      - Clean stream lifecycle (disposed on exit)
+- Camera network optical health & FPS telemetry                                     - Frame snapshot & candidate pipeline testing
+- Immutable system & policy audit trail                                             - AI candidate classification panel
 ```
 
-### 1. 🛡️ Admin Dashboard
-* **Real-time Overview:** Today's total scanned vehicles, safety candidates, pending reviews, approved drafts, and rejected false alerts.
-* **Longitudinal Trends:** Responsive SVG hourly traffic distribution chart and 6-month enforcement trend breakdown.
-* **Registered Citizen Directory:** Vahan database records matching verified citizens to two-wheelers, masked mobile contacts, and notification logs.
-* **Personnel Access:** Staff role allocation across Enforcement Admins, Review Officers, and Camera Operators.
-* **System Health Monitor:** Telemetry cards displaying latency and connectivity for FastAPI, MongoDB, YOLOv8 inference, and camera hardware.
+### 1. 🛡️ Government Admin
+* **Enforcement Overview:** Shift scan totals, safety candidates, pending reviews, approved drafts, and false alert rejections.
+* **Camera Network Sources:** Register, configure, and monitor roadside CCTV and IP cameras across city junctions.
+* **Authorized Registration Records:** State transport registry showing vehicle owners, plate numbers, masked contacts, and dispatch logs. Facial recognition is explicitly prohibited.
+* **Staff & Role Permissions:** Access management across Enforcement Admins, Review Officers, Camera Operators, and Supervisors.
+* **Enforcement Policy Settings:** Interactive parameters for minimum confidence threshold, pillion non-compliance flagging, triple-riding rules, night review requirements, penalty amounts, and data retention windows.
+* **System Health Monitor:** Telemetry for FastAPI, MongoDB, YOLOv8 inference, and camera hardware.
 
-### 2. 🔍 Reviewer / Management Interface
+### 2. 🔍 Traffic Officer / Reviewer
 * **Candidate Queue:** Filterable queue supporting `Pending Review`, `Draft Created`, `Rejected`, and `All Cases`.
 * **Evidence Inspection Deck:** High-resolution evidence viewer with toggleable AI bounding box overlays (`NO_HELMET`, `HELMET`, `RIDER`, `LICENSE_PLATE`), confidence scores, and multi-level zoom.
-* **State Registration Association:** Displays verified vehicle plate and masked owner information.
+* **State Registration Association:** Displays verified vehicle plate and masked owner information (`+91 98*** **412`).
 * **Due-Process Draft Sanction:** Clicking **Approve Challan Draft** opens a legal confirmation modal creating a provisional `CHALLAN_DRAFT`. *It does not claim legal guilt or automatically trigger financial penalties.*
-* **Rejection Audit Workflow:** Rejecting false positives (e.g. shadow contours, lighting glare) requires selecting a documented cause (`FALSE_DETECTION_SHADOW`, `COMPLIANT_HELMET_VERIFIED`, etc.) and adds an entry to the audit log.
+* **Rejection Audit Workflow:** Rejecting false positives (e.g. shadow contours, lighting glare) requires selecting a documented cause (`FALSE_DETECTION_SHADOW`, `COMPLIANT_HELMET_VERIFIED`, etc.) and records an entry in the audit log.
 
-### 3. 📹 Camera Operator Workstation
+### 3. 📹 Camera Operator
 * **Webcam Integration:** Hardware-accelerated local camera stream using browser standard `navigator.mediaDevices.getUserMedia`.
-* **Resource Friendly:** Camera stream is only activated upon explicit user consent and automatically disposes all tracks on exit or stop.
+* **Resource Friendly:** Camera stream is only activated upon explicit operator consent and automatically disposes all tracks on exit or stop.
 * **Snapshot & Pipeline Testing:** Allows live snapshot capture or simulation of network CCTV/IP camera streams.
 * **AI Telemetry:** Candidate classification indicator (`NO_HELMET_CANDIDATE`, `HELMET_DETECTED`, `UNCERTAIN`) with confidence meters and thumbnail history.
 
-### 4. 👤 Registered-Person Portal
-* **Accessible & Plain Language:** Eliminates internal police jargon to provide clear status information for vehicle owners.
-* **Observation Transparency:** Explains that candidate detections are provisional and subject to human officer verification.
-* **Vehicle Association:** Displays registered two-wheelers linked to the citizen profile.
-* **Dispute & Redressal:** Built-in **Report Mismatch** form enabling citizens to contest an incorrect vehicle/face match before any formal action is taken.
+### 4. 📊 Management / Supervisory Officer
+* **Executive Analytics:** Overall city compliance rate (93.9%), sanction consensus ratio, estimated draft fine volume, and false positive suppression rate.
+* **Officer Productivity & Shifts:** Reviews completed today, approval ratios, rejections, average review duration per case, and officer duty status (`ON_DUTY`, `BREAK`, `ON_LEAVE`).
+* **Camera Network Performance:** Optical uptime, resolution, frame rate, and detection yield per junction.
+* **System & Policy Audit Trail:** Filterable log capturing all policy changes, draft sanctions, camera modifications, and actor IPs.
+* **Digest Export:** One-click export for supervisory compliance reports.
 
 ---
 
 ## 🎨 Visual Design System
 
-Built strictly following traffic-safety design principles:
+Built strictly following government enforcement design standards:
 * **Primary Navy:** `#17324D` — Navigation, headings, and high-hierarchy controls
 * **Action Blue:** `#2563EB` — Primary actions, selected states, and links
 * **Safety Amber:** `#F59E0B` — Pending review candidates and caution indicators
@@ -72,12 +74,12 @@ Built strictly following traffic-safety design principles:
 
 ## 💻 Tech Stack & Performance
 
-* **Framework:** React 19 + TypeScript (Strict verbatimModuleSyntax enabled)
+* **Framework:** React 19 + TypeScript (Strict `verbatimModuleSyntax` enabled)
 * **Build Tool:** Vite 8 (Sub-2 second production builds, sub-300ms HMR)
 * **Styling:** Tailwind CSS v4 via `@tailwindcss/vite`
 * **Icons:** Lucide React (`lucide-react`)
 * **Charts:** Zero-dependency SVG chart components (low memory footprint, zero canvas overhead)
-* **Linter:** Oxlint (Static analysis across all components)
+* **Linter:** Oxlint (0 errors, 0 warnings across all files)
 
 ---
 
@@ -100,7 +102,7 @@ Open [http://localhost:5173](http://localhost:5173) in your browser.
 
 ### 3. Verify Code Quality & Type Checks
 ```bash
-# Run lightning-fast linter
+# Run static linter
 npm run lint
 
 # Production build test
@@ -112,14 +114,14 @@ npm run preview
 
 ---
 
-## 🧪 Testing the 4 Demo Personas
+## 🧪 Testing the 4 Government Roles
 
-1. In the header bar or the bottom of the sidebar, find the **Switch Demo Role** selector.
-2. Select **Admin Dashboard:**
-   - Explore the top stat cards and toggle between *Today* and *Monthly* summaries.
-   - Hover over the Hourly Distribution chart bars and Monthly Trend cards.
-   - Switch tabs to *Registered Persons*, click **View Full Profile**, and inspect linked vehicles.
-3. Select **Reviewer / Management:**
+1. In the header bar or the bottom of the sidebar, find the **Switch Government Role** selector.
+2. Select **Government Admin:**
+   - Toggle between *Today* and *Monthly* enforcement overviews.
+   - Switch to *Camera Sources* and click **Register Camera Source** to test adding an RTSP stream.
+   - Switch to *Policy Settings*, adjust the AI confidence slider or fine amount, and click **Save & Apply Policy**.
+3. Select **Traffic Officer / Reviewer:**
    - Select case `TG-2026-8941` from the pending queue.
    - Click **Overlay On / Off** on the evidence image to toggle the AI bounding box.
    - Click **Approve Challan Draft** to test the draft sanction modal and toast alert.
@@ -129,29 +131,11 @@ npm run preview
    - Click **Capture & Analyze Frame** to generate a snapshot and simulate the detection pipeline.
    - Observe the new candidate case getting ingested into the reviewer queue in real-time.
    - Click **Stop Stream** to release camera hardware.
-5. Select **Registered-Person Portal:**
-   - View citizen Aditya Sharma's linked Honda Activa record.
-   - Click **View Evidence** on a past observation.
-   - Click **Report Mismatch** to test the grievance submission modal.
-
----
-
-## 🔌 Backend Integration Boundary (FastAPI & MongoDB)
-
-The frontend contains a modular service layer located under `src/services/`:
-* `api.ts`: Central `fetch` client reading `VITE_API_BASE_URL` with health-checking fallback.
-* `violationsService.ts`: CRUD endpoints (`/api/v1/violations`, `/approve-draft`, `/reject`).
-* `statsService.ts`: Telemetry and time-series endpoints (`/api/v1/stats/dashboard`).
-* `personService.ts`: Registry search and mismatch dispute submission.
-* `cameraService.ts`: Webcam hardware abstraction and frame ingestion.
-* `healthService.ts`: Health check probe (`/api/v1/health`).
-
-### Connecting to Python FastAPI Backend:
-1. Create a `.env` file in the project root:
-   ```env
-   VITE_API_BASE_URL=http://localhost:8000/api/v1
-   ```
-2. When the FastAPI service is running, the frontend automatically detects connectivity and turns the top banner badge to **FastAPI Connected**. If offline, it falls back to the in-memory demo state without crashing.
+5. Select **Supervisory Officer:**
+   - Review executive KPIs (city compliance rate, draft fine volume).
+   - Inspect the **Officer Productivity** table tracking review times and shifts.
+   - Inspect the **Camera Performance** status cards.
+   - Search the **System & Policy Audit Trail** for recent sanctions and settings changes.
 
 ---
 
@@ -160,3 +144,4 @@ The frontend contains a modular service layer located under `src/services/`:
 * **No Facial Recognition:** Riders are never matched or identified by facial appearance; identification strictly requires an authorized registration lookup against the vehicle number plate.
 * **Provisional Drafts Only:** AI detections are treated as unverified candidates until verified by a designated human review officer.
 * **Masked PII:** Phone numbers (`+91 98*** **412`) and sensitive identifiers are masked by default across all dashboards.
+* **Full Audit Trail:** All administrative decisions, policy updates, and draft sanctions are recorded with timestamp, officer name, and origin IP.

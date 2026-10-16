@@ -1,3 +1,4 @@
+
 import React, { useState, useMemo } from 'react';
 import { 
   Camera, 
@@ -11,7 +12,11 @@ import {
   Database, 
   Cpu, 
   RefreshCw,
-  UserPlus
+  UserPlus,
+  Video,
+  Sliders,
+  Plus,
+  Save
 } from 'lucide-react';
 import { useApp } from '../../context';
 import { StatCard } from '../common/StatCard';
@@ -19,7 +24,7 @@ import { StatusBadge } from '../common/StatusBadge';
 import { HourlyDistributionChart, MonthlyTrendChart } from '../common/SimpleChart';
 import { Modal } from '../common/Modal';
 import { EvidenceViewer } from '../common/EvidenceViewer';
-import type { ViolationCase, RegisteredPerson } from '../../types';
+import type { ViolationCase, RegisteredPerson, CameraSourceRecord } from '../../types';
 import { INITIAL_DASHBOARD_STATS } from '../../data/mockData';
 
 export const AdminDashboard: React.FC = () => {
@@ -27,6 +32,10 @@ export const AdminDashboard: React.FC = () => {
     cases, 
     persons, 
     userAccounts, 
+    cameraSources,
+    addCameraSource,
+    systemSettings,
+    updateSystemSettings,
     systemHealth, 
     refreshHealth, 
     activeNavTab,
@@ -39,6 +48,14 @@ export const AdminDashboard: React.FC = () => {
   const [selectedCaseForModal, setSelectedCaseForModal] = useState<ViolationCase | null>(null);
   const [selectedPersonForModal, setSelectedPersonForModal] = useState<RegisteredPerson | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+
+  // Local settings state
+  const [localSettings, setLocalSettings] = useState(systemSettings);
+  const [isAddCameraModalOpen, setIsAddCameraModalOpen] = useState(false);
+  const [newCamName, setNewCamName] = useState('');
+  const [newCamJunction, setNewCamJunction] = useState('');
+  const [newCamType, setNewCamType] = useState<'IP_CAMERA' | 'CCTV_STREAM'>('IP_CAMERA');
+  const [newCamUrl, setNewCamUrl] = useState('');
 
   // Filtered cases for table
   const filteredCases = useMemo(() => {
@@ -74,8 +91,10 @@ export const AdminDashboard: React.FC = () => {
           {[
             { id: 'overview', label: 'Enforcement Overview' },
             { id: 'violations', label: 'Recent Violations' },
-            { id: 'persons', label: 'Registered Directory' },
-            { id: 'users', label: 'User Roles & Access' },
+            { id: 'cameras', label: 'Camera Sources' },
+            { id: 'persons', label: 'Authorized Registry' },
+            { id: 'users', label: 'Staff & Roles' },
+            { id: 'settings', label: 'Policy Settings' },
             { id: 'health', label: 'System Health' }
           ].map(tab => (
             <button
@@ -522,6 +541,214 @@ export const AdminDashboard: React.FC = () => {
         </div>
       )}
 
+      {/* CAMERA NETWORK SOURCES TAB */}
+      {activeNavTab === 'cameras' && (
+        <div className="space-y-4">
+          <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                <Video className="w-4 h-4 text-blue-600" />
+                Traffic Enforcement Camera Network Directory
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Configured roadside CCTV, IP cameras, and field operator video feeds feeding real-time candidate detections.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsAddCameraModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 shadow-xs"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Register Camera Source</span>
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {cameraSources.map(cam => (
+              <div key={cam.id} className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs flex flex-col justify-between">
+                <div>
+                  <div className="flex items-start justify-between gap-2 mb-2">
+                    <div>
+                      <span className="font-mono text-xs font-bold text-slate-900">{cam.id}</span>
+                      <h4 className="text-sm font-bold text-slate-800">{cam.name}</h4>
+                    </div>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                      cam.status === 'ONLINE' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                      cam.status === 'STANDBY' ? 'bg-blue-50 text-blue-700 border-blue-200' :
+                      cam.status === 'DEGRADED' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                      'bg-red-50 text-red-700 border-red-200'
+                    }`}>
+                      {cam.status}
+                    </span>
+                  </div>
+
+                  <div className="text-xs text-slate-500 mb-3">
+                    {cam.junction}
+                  </div>
+
+                  <div className="space-y-1.5 text-xs bg-slate-50 p-2.5 rounded-lg border border-slate-200/60 font-mono">
+                    <div className="flex justify-between text-slate-600">
+                      <span>Stream:</span>
+                      <span className="text-slate-800 font-semibold">{cam.streamType}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-600 truncate">
+                      <span>Endpoint:</span>
+                      <span className="text-slate-700 truncate max-w-[170px]" title={cam.ipOrDeviceUrl}>{cam.ipOrDeviceUrl}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-600">
+                      <span>Resolution:</span>
+                      <span className="text-slate-800">{cam.resolution} @ {cam.fps} FPS</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+                  <span>Today Scans: <strong>{cam.dailyDetectionsCount}</strong></span>
+                  <span className="text-[11px] text-slate-400">Heartbeat: {cam.lastHeartbeat}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* POLICY & SYSTEM SETTINGS TAB */}
+      {activeNavTab === 'settings' && (
+        <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-xs space-y-6">
+          <div className="border-b border-slate-200 pb-4 flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                <Sliders className="w-4 h-4 text-blue-600" />
+                Enforcement Algorithm &amp; Compliance Policy Settings
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Configure legal thresholds, candidate sensitivity, and penalty parameters applied across all camera streams.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => updateSystemSettings(localSettings)}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors shadow-xs"
+            >
+              <Save className="w-3.5 h-3.5" />
+              <span>Save &amp; Apply Policy</span>
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs">
+            {/* Algorithm Thresholds */}
+            <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/60 space-y-4">
+              <h4 className="font-bold text-slate-900 uppercase tracking-wider text-[11px]">
+                Inference Sensitivity Thresholds
+              </h4>
+
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <span className="font-semibold text-slate-700">Minimum AI Candidate Confidence:</span>
+                  <span className="font-mono font-bold text-blue-700">{Math.round(localSettings.minConfidenceThreshold * 100)}%</span>
+                </div>
+                <input
+                  type="range"
+                  min="0.5"
+                  max="0.95"
+                  step="0.05"
+                  value={localSettings.minConfidenceThreshold}
+                  onChange={e => setLocalSettings(prev => ({ ...prev, minConfidenceThreshold: parseFloat(e.target.value) }))}
+                  className="w-full accent-blue-600 cursor-pointer"
+                />
+                <span className="text-[11px] text-slate-400 block mt-0.5">
+                  Frames below this confidence will be discarded by edge processors before reaching the review queue.
+                </span>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Default Challan Draft Amount (INR):
+                </label>
+                <input
+                  type="number"
+                  value={localSettings.defaultDraftPenaltyInr}
+                  onChange={e => setLocalSettings(prev => ({ ...prev, defaultDraftPenaltyInr: parseInt(e.target.value, 10) || 1000 }))}
+                  className="w-full text-xs px-3 py-2 rounded-lg border border-slate-300 bg-white text-slate-900 font-mono"
+                />
+                <span className="text-[11px] text-slate-400 block mt-0.5">
+                  Statutory baseline penalty under Motor Vehicles (Amendment) Act Section 194D.
+                </span>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Evidence Retention Period (Days):
+                </label>
+                <select
+                  value={localSettings.dataRetentionDays}
+                  onChange={e => setLocalSettings(prev => ({ ...prev, dataRetentionDays: parseInt(e.target.value, 10) }))}
+                  className="w-full text-xs px-3 py-2 rounded-lg border border-slate-300 bg-white text-slate-900"
+                >
+                  <option value={30}>30 Days (Standard Audit)</option>
+                  <option value={60}>60 Days (Extended)</option>
+                  <option value={90}>90 Days (Statutory Legal Window)</option>
+                  <option value={180}>180 Days (Court Inquiry Hold)</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Compliance Flags */}
+            <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/60 space-y-4">
+              <h4 className="font-bold text-slate-900 uppercase tracking-wider text-[11px]">
+                Enforcement Rules &amp; Protocols
+              </h4>
+
+              <label className="flex items-start gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={localSettings.autoFlagPillionWithoutHelmet}
+                  onChange={e => setLocalSettings(prev => ({ ...prev, autoFlagPillionWithoutHelmet: e.target.checked }))}
+                  className="mt-0.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-4 h-4"
+                />
+                <div>
+                  <span className="font-semibold text-slate-800 block">Flag Pillion Passengers Without Helmet</span>
+                  <span className="text-[11px] text-slate-500">
+                    Triggers candidate draft when rear pillion rider is detected without compliant safety headgear.
+                  </span>
+                </div>
+              </label>
+
+              <label className="flex items-start gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={localSettings.autoFlagTripleRiding}
+                  onChange={e => setLocalSettings(prev => ({ ...prev, autoFlagTripleRiding: e.target.checked }))}
+                  className="mt-0.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-4 h-4"
+                />
+                <div>
+                  <span className="font-semibold text-slate-800 block">Flag Triple Riding on Two-Wheelers</span>
+                  <span className="text-[11px] text-slate-500">
+                    Automatically categorizes detections with more than 2 occupants as high-priority danger candidates.
+                  </span>
+                </div>
+              </label>
+
+              <label className="flex items-start gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={localSettings.requireSecondaryReviewForNightDetections}
+                  onChange={e => setLocalSettings(prev => ({ ...prev, requireSecondaryReviewForNightDetections: e.target.checked }))}
+                  className="mt-0.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-4 h-4"
+                />
+                <div>
+                  <span className="font-semibold text-slate-800 block">Require Secondary Review for Low-Light Detections</span>
+                  <span className="text-[11px] text-slate-500">
+                    Frames captured between 20:00 and 06:00 require dual review verification to prevent glare false-positives.
+                  </span>
+                </div>
+              </label>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 5. SYSTEM HEALTH TAB */}
       {activeNavTab === 'health' && (
         <div className="space-y-4">
@@ -746,6 +973,117 @@ export const AdminDashboard: React.FC = () => {
               </button>
             </div>
           </div>
+        </Modal>
+      )}
+
+      {/* Add Camera Source Modal */}
+      {isAddCameraModalOpen && (
+        <Modal
+          isOpen={true}
+          onClose={() => setIsAddCameraModalOpen(false)}
+          title="Register New Traffic Surveillance Camera"
+          subtitle="Configure high-definition RTSP, IP, or mobile webcam enforcement stream"
+          maxWidth="md"
+        >
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!newCamName || !newCamJunction) return;
+              const newSource: CameraSourceRecord = {
+                id: `CAM-BLR-${Math.floor(10 + Math.random() * 90)}`,
+                name: newCamName,
+                junction: newCamJunction,
+                streamType: newCamType,
+                status: 'ONLINE',
+                ipOrDeviceUrl: newCamUrl || 'rtsp://10.24.110.50:554/stream1',
+                resolution: '1920x1080',
+                fps: 30,
+                dailyDetectionsCount: 0,
+                lastHeartbeat: 'Just now'
+              };
+              addCameraSource(newSource);
+              setIsAddCameraModalOpen(false);
+              setNewCamName('');
+              setNewCamJunction('');
+              setNewCamUrl('');
+            }}
+            className="space-y-4 text-xs"
+          >
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">Camera Stream Identifier / Name *</label>
+              <input
+                type="text"
+                required
+                value={newCamName}
+                onChange={e => setNewCamName(e.target.value)}
+                placeholder="e.g., Silk Board Jn (South Corridor)"
+                className="w-full text-xs px-3 py-2 rounded-lg border border-slate-300 bg-white text-slate-800"
+              />
+            </div>
+
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">Junction / Sector Location *</label>
+              <input
+                type="text"
+                required
+                value={newCamJunction}
+                onChange={e => setNewCamJunction(e.target.value)}
+                placeholder="e.g., Junction 05 (Hosur Main Road)"
+                className="w-full text-xs px-3 py-2 rounded-lg border border-slate-300 bg-white text-slate-800"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Stream Protocol</label>
+                <select
+                  value={newCamType}
+                  onChange={e => setNewCamType(e.target.value as any)}
+                  className="w-full text-xs px-3 py-2 rounded-lg border border-slate-300 bg-white text-slate-800"
+                >
+                  <option value="IP_CAMERA">IP Camera (RTSP)</option>
+                  <option value="CCTV_STREAM">CCTV (HLS/WebRTC)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Target Resolution</label>
+                <input
+                  type="text"
+                  disabled
+                  value="1920x1080 (1080p)"
+                  className="w-full text-xs px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 text-slate-500"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">RTSP Stream URI / Endpoint</label>
+              <input
+                type="text"
+                value={newCamUrl}
+                onChange={e => setNewCamUrl(e.target.value)}
+                placeholder="rtsp://10.24.110.xx:554/live"
+                className="w-full text-xs px-3 py-2 rounded-lg border border-slate-300 bg-white text-slate-800 font-mono"
+              />
+            </div>
+
+            <div className="pt-2 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsAddCameraModalOpen(false)}
+                className="px-4 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-xs"
+              >
+                Register Stream
+              </button>
+            </div>
+          </form>
         </Modal>
       )}
     </div>

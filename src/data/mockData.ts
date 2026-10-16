@@ -3,7 +3,11 @@ import type {
   RegisteredPerson, 
   UserAccount, 
   DashboardStats,
-  SystemHealthState 
+  SystemHealthState,
+  CameraSourceRecord,
+  OfficerActivity,
+  SystemSettings,
+  SystemAuditLogEntry
 } from '../types';
 
 // Helper to generate SVG data URIs for realistic offline evidence images
@@ -337,7 +341,7 @@ export const INITIAL_CASES: ViolationCase[] = [
       {
         id: 'audit-3',
         timestamp: '2026-10-16 11:28:40',
-        actor: 'Insp. R. Deshmukh',
+        actor: 'Inspector Rohit Deshmukh',
         role: 'reviewer',
         action: 'DRAFT_APPROVED',
         notes: 'Challan draft created for pillion safety compliance review under Section 129 Motor Vehicles Act.'
@@ -392,7 +396,7 @@ export const INITIAL_CASES: ViolationCase[] = [
       {
         id: 'audit-5',
         timestamp: '2026-10-16 11:02:15',
-        actor: 'Insp. R. Deshmukh',
+        actor: 'Inspector Rohit Deshmukh',
         role: 'reviewer',
         action: 'CASE_REJECTED',
         reason: 'Low quality evidence & false shadow trigger. Compliant helmet verified.'
@@ -448,7 +452,7 @@ export const INITIAL_CASES: ViolationCase[] = [
       {
         id: 'audit-7',
         timestamp: '2026-10-16 09:40:00',
-        actor: 'Senior Reviewer A. Sen',
+        actor: 'Sub-Inspector Meera Rao',
         role: 'reviewer',
         action: 'DRAFT_APPROVED',
         notes: 'Triple riding safety violation confirmed.'
@@ -497,40 +501,187 @@ export const INITIAL_CASES: ViolationCase[] = [
 
 export const INITIAL_USER_ACCOUNTS: UserAccount[] = [
   {
-    id: 'USR-001',
-    name: 'Inspector Vikram Malhotra',
-    email: 'v.malhotra@trafficpolice.gov.in',
+    id: 'GOV-ADM-001',
+    name: 'Joint Commissioner P. K. Saxena, IPS',
+    email: 'pk.saxena@trafficpolice.gov.in',
     role: 'admin',
-    department: 'Central Traffic Enforcement Cell',
+    department: 'Central Traffic Enforcement Command',
     status: 'ACTIVE',
     lastLogin: '2026-10-16 11:30'
   },
   {
-    id: 'USR-002',
-    name: 'Sub-Inspector Rohit Deshmukh',
+    id: 'GOV-REV-002',
+    name: 'Inspector Rohit Deshmukh',
     email: 'r.deshmukh@trafficpolice.gov.in',
     role: 'reviewer',
-    department: 'Violation Review & Notice Unit',
+    department: 'Violation Review & Notice Adjudication Unit',
     status: 'ACTIVE',
     lastLogin: '2026-10-16 11:25'
   },
   {
-    id: 'USR-003',
-    name: 'Operator Ananya Joshi',
+    id: 'GOV-OPR-003',
+    name: 'Technical Operator Ananya Joshi',
     email: 'a.joshi@trafficcontrol.local',
     role: 'operator',
-    department: 'CCTV Surveillance & Camera Operations',
+    department: 'CCTV Surveillance & Camera Operations Desk',
     status: 'ACTIVE',
     lastLogin: '2026-10-16 10:10'
   },
   {
-    id: 'USR-004',
-    name: 'Aditya Sharma (Registered Citizen)',
-    email: 'aditya.sharma@example.com',
-    role: 'citizen',
-    department: 'Public Citizen Portal',
+    id: 'GOV-SUP-004',
+    name: 'DCP Sunita Nair, IPS (Supervisory Officer)',
+    email: 's.nair@trafficpolice.gov.in',
+    role: 'supervisor',
+    department: 'Traffic Planning, Vigilance & Supervisory Directorate',
     status: 'ACTIVE',
-    lastLogin: '2026-10-16 09:05'
+    lastLogin: '2026-10-16 09:45'
+  }
+];
+
+export const INITIAL_CAMERA_SOURCES: CameraSourceRecord[] = [
+  {
+    id: 'CAM-BLR-01',
+    name: 'MG Road Trinity Circle',
+    junction: 'Junction 01 (Central Business District)',
+    streamType: 'IP_CAMERA',
+    status: 'ONLINE',
+    ipOrDeviceUrl: 'rtsp://10.24.110.12:554/stream1',
+    resolution: '1920x1080',
+    fps: 30,
+    dailyDetectionsCount: 412,
+    lastHeartbeat: '10s ago'
+  },
+  {
+    id: 'CAM-BLR-02',
+    name: 'Indiranagar 100ft Road',
+    junction: 'Junction 02 (Indiranagar Metro Corridor)',
+    streamType: 'CCTV_STREAM',
+    status: 'ONLINE',
+    ipOrDeviceUrl: 'rtsp://10.24.110.14:554/live',
+    resolution: '1920x1080',
+    fps: 25,
+    dailyDetectionsCount: 388,
+    lastHeartbeat: '14s ago'
+  },
+  {
+    id: 'CAM-BLR-03',
+    name: 'Hebbal Flyover North Ramp',
+    junction: 'Junction 03 (Airport Expressway)',
+    streamType: 'IP_CAMERA',
+    status: 'DEGRADED',
+    ipOrDeviceUrl: 'rtsp://10.24.110.18:554/stream1',
+    resolution: '1280x720',
+    fps: 20,
+    dailyDetectionsCount: 295,
+    lastHeartbeat: '45s ago'
+  },
+  {
+    id: 'CAM-BLR-04',
+    name: 'Koramangala 80ft Road',
+    junction: 'Junction 04 (Inner Ring Road Crossing)',
+    streamType: 'CCTV_STREAM',
+    status: 'ONLINE',
+    ipOrDeviceUrl: 'rtsp://10.24.110.22:554/feed',
+    resolution: '1920x1080',
+    fps: 30,
+    dailyDetectionsCount: 333,
+    lastHeartbeat: '8s ago'
+  },
+  {
+    id: 'CAM-LOCAL-01',
+    name: 'Laptop Field Terminal (Integrated Webcam)',
+    junction: 'Mobile Patrol / Field Enforcement Unit',
+    streamType: 'WEBCAM',
+    status: 'STANDBY',
+    ipOrDeviceUrl: 'navigator.mediaDevices (device:0)',
+    resolution: '1280x720',
+    fps: 30,
+    dailyDetectionsCount: 14,
+    lastHeartbeat: 'Ready'
+  }
+];
+
+export const INITIAL_OFFICER_ACTIVITIES: OfficerActivity[] = [
+  {
+    officerId: 'GOV-REV-002',
+    officerName: 'Inspector Rohit Deshmukh',
+    rank: 'Inspector of Police',
+    shift: 'Morning Shift (07:00 - 15:00)',
+    totalReviewedToday: 48,
+    approvedDrafts: 36,
+    rejectedCount: 12,
+    avgReviewDurationSec: 22,
+    status: 'ON_DUTY'
+  },
+  {
+    officerId: 'GOV-REV-005',
+    officerName: 'Sub-Inspector Meera Rao',
+    rank: 'Sub-Inspector',
+    shift: 'Morning Shift (07:00 - 15:00)',
+    totalReviewedToday: 41,
+    approvedDrafts: 31,
+    rejectedCount: 10,
+    avgReviewDurationSec: 28,
+    status: 'ON_DUTY'
+  },
+  {
+    officerId: 'GOV-REV-006',
+    officerName: 'Assistant Sub-Inspector Kiran Kumar',
+    rank: 'ASI (Traffic)',
+    shift: 'General Shift (09:00 - 17:00)',
+    totalReviewedToday: 32,
+    approvedDrafts: 24,
+    rejectedCount: 8,
+    avgReviewDurationSec: 35,
+    status: 'BREAK'
+  }
+];
+
+export const INITIAL_SYSTEM_SETTINGS: SystemSettings = {
+  minConfidenceThreshold: 0.65,
+  autoFlagPillionWithoutHelmet: true,
+  autoFlagTripleRiding: true,
+  requireSecondaryReviewForNightDetections: true,
+  dataRetentionDays: 90,
+  defaultDraftPenaltyInr: 1000
+};
+
+export const INITIAL_SYSTEM_AUDIT_LOGS: SystemAuditLogEntry[] = [
+  {
+    id: 'AUDIT-SYS-891',
+    timestamp: '2026-10-16 11:35:12',
+    actor: 'Joint Commissioner P. K. Saxena, IPS',
+    actorRole: 'admin',
+    eventCategory: 'SYSTEM_SETTING',
+    description: 'Updated minimum candidate confidence threshold to 0.65 for daytime camera streams.',
+    ipAddress: '10.200.4.15'
+  },
+  {
+    id: 'AUDIT-SYS-889',
+    timestamp: '2026-10-16 11:28:40',
+    actor: 'Inspector Rohit Deshmukh',
+    actorRole: 'reviewer',
+    eventCategory: 'DRAFT_SANCTION',
+    description: 'Sanctioned Challan Draft DFT-2026-00481 for Case TG-2026-8940 (Pillion Helmet Non-compliance).',
+    ipAddress: '10.200.4.42'
+  },
+  {
+    id: 'AUDIT-SYS-885',
+    timestamp: '2026-10-16 10:45:00',
+    actor: 'Technical Operator Ananya Joshi',
+    actorRole: 'operator',
+    eventCategory: 'CAMERA_CONFIG',
+    description: 'Re-calibrated optical frame rate on Koramangala 80ft Road stream (CAM-BLR-04) to 30 FPS.',
+    ipAddress: '10.200.4.67'
+  },
+  {
+    id: 'AUDIT-SYS-872',
+    timestamp: '2026-10-16 09:15:30',
+    actor: 'DCP Sunita Nair, IPS',
+    actorRole: 'supervisor',
+    eventCategory: 'POLICY_UPDATE',
+    description: 'Generated supervisory compliance audit report for Q3 Bangalore South Zone.',
+    ipAddress: '10.200.4.10'
   }
 ];
 
@@ -591,7 +742,7 @@ export const INITIAL_SYSTEM_HEALTH: SystemHealthState = {
     status: 'ONLINE',
     responseTimeMs: 16,
     lastChecked: 'Just now',
-    message: '4 camera streams configured; laptop webcam standby'
+    message: '5 camera sources configured; laptop webcam standby'
   },
   isBackendConnected: false,
   isDemoMode: true

@@ -1,4 +1,4 @@
-export type UserRole = 'admin' | 'reviewer' | 'operator' | 'citizen';
+export type UserRole = 'admin' | 'reviewer' | 'operator' | 'supervisor';
 
 export type ViolationStatus = 'PENDING_REVIEW' | 'DRAFT_CREATED' | 'REJECTED' | 'REVIEWED';
 
@@ -95,6 +95,50 @@ export interface RegisteredPerson {
   linkedVehicles: LinkedVehicle[];
   notificationHistory: NotificationRecord[];
   linkedCasesCount: number;
+}
+
+export interface CameraSourceRecord {
+  id: string;
+  name: string;
+  junction: string;
+  streamType: CameraSourceType;
+  status: 'ONLINE' | 'STANDBY' | 'DEGRADED' | 'OFFLINE';
+  ipOrDeviceUrl: string;
+  resolution: string;
+  fps: number;
+  dailyDetectionsCount: number;
+  lastHeartbeat: string;
+}
+
+export interface OfficerActivity {
+  officerId: string;
+  officerName: string;
+  rank: string;
+  shift: string;
+  totalReviewedToday: number;
+  approvedDrafts: number;
+  rejectedCount: number;
+  avgReviewDurationSec: number;
+  status: 'ON_DUTY' | 'ON_LEAVE' | 'BREAK';
+}
+
+export interface SystemSettings {
+  minConfidenceThreshold: number;
+  autoFlagPillionWithoutHelmet: boolean;
+  autoFlagTripleRiding: boolean;
+  requireSecondaryReviewForNightDetections: boolean;
+  dataRetentionDays: number;
+  defaultDraftPenaltyInr: number;
+}
+
+export interface SystemAuditLogEntry {
+  id: string;
+  timestamp: string;
+  actor: string;
+  actorRole: UserRole;
+  eventCategory: 'ROLE_CHANGE' | 'CAMERA_CONFIG' | 'DRAFT_SANCTION' | 'SYSTEM_SETTING' | 'POLICY_UPDATE';
+  description: string;
+  ipAddress: string;
 }
 
 export interface SystemServiceHealth {

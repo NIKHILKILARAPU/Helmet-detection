@@ -6,13 +6,21 @@ import type {
   ToastMessage, 
   SystemHealthState, 
   RegisteredPerson, 
-  UserAccount 
+  UserAccount,
+  CameraSourceRecord,
+  OfficerActivity,
+  SystemSettings,
+  SystemAuditLogEntry
 } from '../types';
 import { 
   INITIAL_CASES, 
   INITIAL_REGISTERED_PERSONS, 
   INITIAL_USER_ACCOUNTS, 
-  INITIAL_SYSTEM_HEALTH 
+  INITIAL_SYSTEM_HEALTH,
+  INITIAL_CAMERA_SOURCES,
+  INITIAL_OFFICER_ACTIVITIES,
+  INITIAL_SYSTEM_SETTINGS,
+  INITIAL_SYSTEM_AUDIT_LOGS
 } from '../data/mockData';
 import { healthService } from '../services/healthService';
 import { AppContext } from './appContextDefinition';
@@ -22,6 +30,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [userAccounts] = useState<UserAccount[]>(INITIAL_USER_ACCOUNTS);
   const [cases, setCases] = useState<ViolationCase[]>(INITIAL_CASES);
   const [persons, setPersons] = useState<RegisteredPerson[]>(INITIAL_REGISTERED_PERSONS);
+  const [cameraSources, setCameraSources] = useState<CameraSourceRecord[]>(INITIAL_CAMERA_SOURCES);
+  const [officerActivities] = useState<OfficerActivity[]>(INITIAL_OFFICER_ACTIVITIES);
+  const [systemSettings, setSystemSettings] = useState<SystemSettings>(INITIAL_SYSTEM_SETTINGS);
+  const [systemAuditLogs, setSystemAuditLogs] = useState<SystemAuditLogEntry[]>(INITIAL_SYSTEM_AUDIT_LOGS);
   const [selectedCase, setSelectedCase] = useState<ViolationCase | null>(null);
   const [selectedPerson, setSelectedPerson] = useState<RegisteredPerson | null>(null);
   const [systemHealth, setSystemHealth] = useState<SystemHealthState>(INITIAL_SYSTEM_HEALTH);
@@ -34,8 +46,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       setActiveNavTab('queue');
     } else if (role === 'operator') {
       setActiveNavTab('camera-feed');
-    } else if (role === 'citizen') {
-      setActiveNavTab('my-portal');
+    } else if (role === 'supervisor') {
+      setActiveNavTab('supervisor-analytics');
     } else {
       setActiveNavTab('overview');
     }
@@ -74,6 +86,44 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     };
   }, []);
 
+  const updateSystemSettings = useCallback((newSettings: Partial<SystemSettings>) => {
+    setSystemSettings(prev => ({ ...prev, ...newSettings }));
+    const newLog: SystemAuditLogEntry = {
+      id: `AUDIT-SYS-${Date.now().toString().slice(-4)}`,
+      timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
+      actor: currentUser.name,
+      actorRole: currentRole,
+      eventCategory: 'SYSTEM_SETTING',
+      description: `Updated enforcement parameters: ${Object.keys(newSettings).join(', ')}.`,
+      ipAddress: '10.200.4.15'
+    };
+    setSystemAuditLogs(prev => [newLog, ...prev]);
+    addToast({
+      type: 'success',
+      title: 'Enforcement Policy Updated',
+      message: 'System parameters adjusted and logged to immutable audit trail.'
+    });
+  }, [currentUser.name, currentRole, addToast]);
+
+  const addCameraSource = useCallback((newSource: CameraSourceRecord) => {
+    setCameraSources(prev => [newSource, ...prev]);
+    const newLog: SystemAuditLogEntry = {
+      id: `AUDIT-SYS-${Date.now().toString().slice(-4)}`,
+      timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
+      actor: currentUser.name,
+      actorRole: currentRole,
+      eventCategory: 'CAMERA_CONFIG',
+      description: `Registered new camera feed: ${newSource.name} (${newSource.junction}).`,
+      ipAddress: '10.200.4.15'
+    };
+    setSystemAuditLogs(prev => [newLog, ...prev]);
+    addToast({
+      type: 'success',
+      title: 'Camera Source Registered',
+      message: `Enforcement stream ${newSource.name} added to active surveillance directory.`
+    });
+  }, [currentUser.name, currentRole, addToast]);
+
   // Reviewer actions
   const approveDraft = useCallback((caseId: string, reviewerNotes?: string) => {
     setCases(prev => prev.map(c => {
@@ -98,6 +148,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         ]
       };
     }));
+
+    const auditEntry: SystemAuditLogEntry = {
+      id: `AUDIT-SYS-${Date.now().toString().slice(-4)}`,
+      timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
+      actor: currentUser.name,
+      actorRole: currentRole,
+      eventCategory: 'DRAFT_SANCTION',
+      description: `Sanctioned review draft for case ${caseId} under Section 129 Motor Vehicles Act.`,
+      ipAddress: '10.200.4.42'
+    };
+    setSystemAuditLogs(prev => [auditEntry, ...prev]);
 
     addToast({
       type: 'success',
@@ -156,6 +217,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setCases,
         persons,
         setPersons,
+        cameraSources,
+        setCameraSources,
+        officerActivities,
+        systemSettings,
+        updateSystemSettings,
+        systemAuditLogs,
         selectedCase,
         setSelectedCase,
         selectedPerson,
@@ -169,7 +236,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setActiveNavTab,
         approveDraft,
         rejectCase,
-        addNewCapturedCase
+        addNewCapturedCase,
+        addCameraSource
       }}
     >
       {children}

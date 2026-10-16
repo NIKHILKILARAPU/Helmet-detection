@@ -6,7 +6,7 @@ import { ToastContainer } from './components/common/ToastContainer';
 import { AdminDashboard } from './components/admin/AdminDashboard';
 import { ReviewerQueue } from './components/reviewer/ReviewerQueue';
 import { CameraOperatorView } from './components/operator/CameraOperatorView';
-import { CitizenPortal } from './components/citizen/CitizenPortal';
+import { SupervisorDashboard } from './components/supervisor/SupervisorDashboard';
 
 const AppLayout: React.FC = () => {
   const { currentRole } = useApp();
@@ -16,24 +16,24 @@ const AppLayout: React.FC = () => {
   const getPageTitle = () => {
     switch (currentRole) {
       case 'admin':
-        return 'Enforcement Management & System Intelligence';
+        return 'Government Administration & Enforcement Controls';
       case 'reviewer':
-        return 'Candidate Review Desk & Draft Sanction';
+        return 'Traffic Adjudication Officer Review Desk';
       case 'operator':
-        return 'Live Surveillance Camera & Capture Stream';
-      case 'citizen':
-        return 'Citizen Traffic Safety Portal';
+        return 'Surveillance Camera Feeds & AI Edge Monitoring';
+      case 'supervisor':
+        return 'Supervisory Command & Enforcement Analytics';
       default:
-        return 'TrafficGuard AI System';
+        return 'TrafficGuard AI — Government Enforcement System';
     }
   };
 
   const getBreadcrumbs = () => {
     const roleLabels: Record<string, string> = {
-      admin: 'Admin Center',
-      reviewer: 'Review Officer',
+      admin: 'Government Admin',
+      reviewer: 'Traffic Officer / Reviewer',
       operator: 'Camera Surveillance',
-      citizen: 'Citizen Portal'
+      supervisor: 'Supervisory Directorate'
     };
     return ['TrafficGuard AI', roleLabels[currentRole] || 'Workspace'];
   };
@@ -63,7 +63,7 @@ const AppLayout: React.FC = () => {
             {currentRole === 'admin' && <AdminDashboard />}
             {currentRole === 'reviewer' && <ReviewerQueue />}
             {currentRole === 'operator' && <CameraOperatorView />}
-            {currentRole === 'citizen' && <CitizenPortal />}
+            {currentRole === 'supervisor' && <SupervisorDashboard />}
           </div>
         </main>
       </div>

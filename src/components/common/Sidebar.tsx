@@ -9,10 +9,13 @@ import {
   UserCheck, 
   ChevronLeft, 
   ChevronRight, 
-  Car, 
-  HelpCircle,
   FileCheck2,
-  X
+  X,
+  Sliders,
+  BarChart3,
+  Video,
+  ShieldAlert,
+  ClipboardList
 } from 'lucide-react';
 import { useApp } from '../../context';
 import type { UserRole } from '../../types';
@@ -38,26 +41,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
         return [
           { id: 'overview', label: 'Enforcement Overview', icon: <LayoutDashboard className="w-4 h-4" /> },
           { id: 'violations', label: 'Recent Violations', icon: <FileText className="w-4 h-4" /> },
-          { id: 'persons', label: 'Registered Persons', icon: <Users className="w-4 h-4" /> },
-          { id: 'users', label: 'User & Role Access', icon: <UserCheck className="w-4 h-4" /> },
+          { id: 'cameras', label: 'Camera Network Sources', icon: <Video className="w-4 h-4" /> },
+          { id: 'persons', label: 'Authorized Registrations', icon: <Users className="w-4 h-4" /> },
+          { id: 'users', label: 'Staff & Role Permissions', icon: <UserCheck className="w-4 h-4" /> },
+          { id: 'settings', label: 'Policy & System Settings', icon: <Sliders className="w-4 h-4" /> },
           { id: 'health', label: 'System Health & AI', icon: <Activity className="w-4 h-4" /> }
         ];
       case 'reviewer':
         return [
-          { id: 'queue', label: 'Review Candidate Queue', icon: <FileCheck2 className="w-4 h-4" /> },
-          { id: 'audit-log', label: 'Reviewer Audit Log', icon: <FileText className="w-4 h-4" /> }
+          { id: 'queue', label: 'Candidate Review Queue', icon: <FileCheck2 className="w-4 h-4" /> },
+          { id: 'audit-log', label: 'Officer Sanctions Log', icon: <FileText className="w-4 h-4" /> }
         ];
       case 'operator':
         return [
-          { id: 'camera-feed', label: 'Live Camera & Capture', icon: <Camera className="w-4 h-4" /> },
-          { id: 'recent-captures', label: 'Recent Camera Scans', icon: <FileText className="w-4 h-4" /> }
+          { id: 'camera-feed', label: 'Live Surveillance & Capture', icon: <Camera className="w-4 h-4" /> },
+          { id: 'recent-captures', label: 'Recent Scans History', icon: <FileText className="w-4 h-4" /> }
         ];
-      case 'citizen':
+      case 'supervisor':
         return [
-          { id: 'my-portal', label: 'My Profile & Status', icon: <UserCheck className="w-4 h-4" /> },
-          { id: 'my-vehicles', label: 'Linked Vehicles', icon: <Car className="w-4 h-4" /> },
-          { id: 'my-cases', label: 'Traffic Observations', icon: <FileText className="w-4 h-4" /> },
-          { id: 'help-support', label: 'Help & Dispute Support', icon: <HelpCircle className="w-4 h-4" /> }
+          { id: 'supervisor-analytics', label: 'Supervisory Analytics', icon: <BarChart3 className="w-4 h-4" /> },
+          { id: 'officer-activity', label: 'Officer Productivity', icon: <ClipboardList className="w-4 h-4" /> },
+          { id: 'camera-performance', label: 'Camera Performance', icon: <Video className="w-4 h-4" /> },
+          { id: 'supervisory-audit', label: 'System Audit Logs', icon: <ShieldAlert className="w-4 h-4" /> }
         ];
       default:
         return [];
@@ -67,10 +72,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const navLinks = getNavLinks();
 
   const roleColors: Record<UserRole, { badge: string; text: string }> = {
-    admin: { badge: 'bg-indigo-100 text-indigo-800', text: 'Admin Enforcement' },
-    reviewer: { badge: 'bg-blue-100 text-blue-800', text: 'Review Officer' },
+    admin: { badge: 'bg-indigo-100 text-indigo-800', text: 'Government Admin' },
+    reviewer: { badge: 'bg-blue-100 text-blue-800', text: 'Traffic Officer / Reviewer' },
     operator: { badge: 'bg-emerald-100 text-emerald-800', text: 'Camera Operator' },
-    citizen: { badge: 'bg-amber-100 text-amber-800', text: 'Registered Citizen' }
+    supervisor: { badge: 'bg-purple-100 text-purple-800', text: 'Supervisory Officer' }
   };
 
   const content = (
@@ -87,7 +92,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 TrafficGuard AI
               </div>
               <div className="text-[10px] text-slate-300 font-medium">
-                Helmet &amp; E-Challan System
+                Government Traffic Enforcement
               </div>
             </div>
           )}
@@ -110,7 +115,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {(!isCollapsed || isMobileOpen) && (
         <div className="px-4 py-3 bg-slate-800/40 border-b border-slate-700/50">
           <div className="text-[10px] uppercase font-semibold text-slate-400 mb-1">
-            Active Role Workspace
+            Official Enforcement Workspace
           </div>
           <span className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold ${roleColors[currentRole].badge}`}>
             {roleColors[currentRole].text}
@@ -150,10 +155,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {(!isCollapsed || isMobileOpen) ? (
         <div className="p-3 border-t border-slate-700/80 bg-slate-900/50">
           <div className="text-[11px] font-semibold text-slate-400 mb-2">
-            Switch Demo Role:
+            Switch Government Role:
           </div>
           <div className="grid grid-cols-2 gap-1.5">
-            {(['admin', 'reviewer', 'operator', 'citizen'] as UserRole[]).map(role => (
+            {(['admin', 'reviewer', 'operator', 'supervisor'] as UserRole[]).map(role => (
               <button
                 key={role}
                 type="button"
@@ -161,13 +166,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   setCurrentRole(role);
                   if (isMobileOpen) onCloseMobile();
                 }}
-                className={`text-[11px] py-1.5 px-2 rounded font-medium capitalize text-center transition-colors ${
+                className={`text-[11px] py-1.5 px-2 rounded font-medium capitalize text-center transition-colors truncate ${
                   currentRole === role 
                     ? 'bg-blue-600 text-white font-bold' 
                     : 'bg-slate-800/80 text-slate-300 hover:bg-slate-700'
                 }`}
               >
-                {role}
+                {role === 'admin' ? 'Admin' : role === 'reviewer' ? 'Reviewer' : role === 'operator' ? 'Operator' : 'Supervisor'}
               </button>
             ))}
           </div>
