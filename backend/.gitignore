@@ -1,0 +1,19 @@
+# Virtual environments
+venv/
+env/
+ENV/
+
+# Environment files and credentials
+.env
+.env.*
+!.env.example
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Coverage and testing output
+.coverage
+htmlcov/
