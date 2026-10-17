@@ -1,5 +1,6 @@
 import type { BoundingBox, ViolationCase, ViolationType } from '../types';
 import { generateTrafficEvidenceSvg } from '../data/mockData';
+import { apiClient } from './api';
 
 export interface CameraDevice {
   deviceId: string;
@@ -76,6 +77,58 @@ class CameraService {
     }
     ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
     return canvas.toDataURL('image/jpeg', 0.85);
+  }
+
+  captureFrameBlob(videoElement: HTMLVideoElement): Promise<Blob> {
+    return new Promise((resolve, reject) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = videoElement.videoWidth || 640;
+      canvas.height = videoElement.videoHeight || 480;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        return reject(new Error('Canvas 2D context unavailable'));
+      }
+      ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob(
+        blob => {
+          if (blob) {
+            resolve(blob);
+          } else {
+            reject(new Error('Failed to encode video frame canvas to JPEG blob.'));
+          }
+        },
+        'image/jpeg',
+        0.88
+      );
+    });
+  }
+
+  async analyzeFrame(
+    imageFileOrBlob: File | Blob,
+    cameraId?: string,
+    sourceLabel: string = 'Operator Live Station'
+  ) {
+    const formData = new FormData();
+    if (imageFileOrBlob instanceof File) {
+      formData.append('file', imageFileOrBlob, imageFileOrBlob.name);
+    } else {
+      formData.append('file', imageFileOrBlob, `webcam_frame_${Date.now()}.jpg`);
+    }
+    if (cameraId && cameraId !== 'default') {
+      formData.append('camera_id', cameraId);
+    }
+    formData.append('source_label', sourceLabel);
+    formData.append('auto_ingest', 'true');
+
+    return apiClient.upload<any>('/detections/analyze', formData);
+  }
+
+  async getModelStatus() {
+    return apiClient.get<any>('/detections/model-status', {
+      isLoaded: false,
+      classesCount: 0,
+      helmetClassificationSupported: false,
+    });
   }
 
   simulateCandidateDetection(

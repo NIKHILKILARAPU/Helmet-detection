@@ -16,7 +16,7 @@ export type IdentityVerificationStatus = 'VERIFIED' | 'UNVERIFIED' | 'MANUAL_REQ
 
 export interface BoundingBox {
   id: string;
-  label: 'RIDER' | 'HELMET' | 'NO_HELMET' | 'LICENSE_PLATE' | 'MOTORCYCLE';
+  label: 'RIDER' | 'HELMET' | 'NO_HELMET' | 'LICENSE_PLATE' | 'MOTORCYCLE' | string;
   confidence: number;
   x: number; // percentage (0 - 100)
   y: number;
@@ -207,3 +207,59 @@ export interface ToastMessage {
   message: string;
   durationMs?: number;
 }
+
+export interface DetectionBox {
+  id: string;
+  label: string;
+  classId: number;
+  category: 'HELMET_VIOLATION' | 'HELMET_COMPLIANT' | 'PERSON' | 'VEHICLE' | 'OTHER' | string;
+  confidence: number;
+  xyxy: [number, number, number, number];
+  normalized: [number, number, number, number];
+  percentage: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  color: string;
+}
+
+export interface DetectionAnalysisResult {
+  detected: boolean;
+  totalDetections: number;
+  boxes: DetectionBox[];
+  vehicles: DetectionBox[];
+  persons: DetectionBox[];
+  helmetClassificationAvailable: boolean;
+  helmetClassificationMessage: string;
+  isCandidateViolation: boolean;
+  violationType?: ViolationType | null;
+  violationConfidence?: number | null;
+  caseId?: string | null;
+  status: string;
+  evidence?: {
+    storagePath: string;
+    fileHash?: string;
+    mimeType?: string;
+    width?: number;
+    height?: number;
+    fileSizeBytes?: number;
+  };
+  modelRunId?: string | null;
+  processingTimeMs: number;
+  imageDimensions: {
+    width: number;
+    height: number;
+  };
+  modelInfo: {
+    isLoaded: boolean;
+    modelPath: string;
+    classesCount: number;
+    helmetClassificationSupported: boolean;
+    confidenceThreshold: number;
+    loadError?: string | null;
+    expectedClasses: string[];
+  };
+}
+

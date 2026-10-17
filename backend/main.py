@@ -10,10 +10,12 @@ Configures:
 """
 
 from contextlib import asynccontextmanager
+import os
 import uvicorn
 from fastapi import FastAPI, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.db.connection import mongo_manager, close_mongo_connection
@@ -33,6 +35,7 @@ from app.api.vehicles import router as vehicles_router
 from app.api.settings import router as settings_router
 from app.api.operations import router as operations_router
 from app.api.audit import router as audit_router
+from app.api.detections import router as detections_router
 from app.models.yolo_inference import yolo_engine
 
 
@@ -85,7 +88,7 @@ async def health_check():
         error=db_health_raw.get("error"),
     )
 
-    yolo_status = "READY" if yolo_engine.is_model_loaded() else "DEMO_STANDIN"
+    yolo_status = "READY" if yolo_engine.is_model_loaded() else "UNAVAILABLE"
     overall_status = "ONLINE" if db_health.is_ready else "DEGRADED"
 
     msg = (
@@ -134,8 +137,15 @@ async def db_readiness_probe():
     )
 
 
+# Static evidence files mount (safely serves local frame images)
+uploads_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "uploads"))
+os.makedirs(os.path.join(uploads_dir, "evidence"), exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
+
+
 # Register API routers
 app.include_router(auth_router, prefix=settings.API_PREFIX)
+app.include_router(detections_router, prefix=settings.API_PREFIX)
 app.include_router(violations_router, prefix=settings.API_PREFIX)
 app.include_router(stats_router, prefix=settings.API_PREFIX)
 app.include_router(camera_router, prefix=settings.API_PREFIX)

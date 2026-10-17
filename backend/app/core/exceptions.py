@@ -110,3 +110,38 @@ class ForbiddenError(AppException):
             error_code="FORBIDDEN",
             message=message,
         )
+
+
+class ModelNotAvailableError(AppException):
+    """AI Model weights missing or unreadable (HTTP 503)."""
+
+    def __init__(
+        self,
+        message: str = "Trained model weights are not available on this server.",
+        expected_path: Optional[str] = None,
+        expected_classes: Optional[List[str]] = None,
+    ) -> None:
+        details = []
+        if expected_path:
+            details.append(
+                ErrorDetail(
+                    field="model_path",
+                    message=f"Expected model weights file at: {expected_path}",
+                    error_type="FILE_MISSING",
+                )
+            )
+        if expected_classes:
+            details.append(
+                ErrorDetail(
+                    field="expected_classes",
+                    message=f"Required classes for helmet violation detection: {', '.join(expected_classes)}",
+                    error_type="CLASSES_REQUIRED",
+                )
+            )
+        super().__init__(
+            status_code=503,
+            error_code="MODEL_NOT_AVAILABLE",
+            message=message,
+            details=details,
+        )
+
