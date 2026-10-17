@@ -66,6 +66,8 @@ export interface ViolationCase {
   challanDraftNumber?: string;
   draftAmountInr?: number;
   rejectionReason?: string;
+  riders?: RiderDetection[];
+  plateMatch?: PlateMatchResult | null;
 }
 
 export interface LinkedVehicle {
@@ -226,12 +228,40 @@ export interface DetectionBox {
   color: string;
 }
 
+export interface RiderDetection {
+  detectionId: string;
+  label: string;
+  classification: 'WITH_HELMET' | 'WITHOUT_HELMET' | 'UNKNOWN' | string;
+  confidence: number;
+  bbox: [number, number, number, number];
+  normalized: [number, number, number, number];
+  cropPath?: string | null;
+  isViolation: boolean;
+}
+
+export interface PlateMatchResult {
+  plateDetected: boolean;
+  rawText?: string | null;
+  normalizedPlate?: string | null;
+  bbox?: [number, number, number, number] | null;
+  cropPath?: string | null;
+  matchStatus: 'VERIFIED' | 'UNVERIFIED' | 'MANUAL_REQUIRED' | string;
+  matchSource?: string | null;
+  confidence: number;
+  matchedVehicleId?: string | null;
+  matchedPersonId?: string | null;
+  ownerNameSnapshot?: string | null;
+  vehicleDetails?: Record<string, any> | null;
+}
+
 export interface DetectionAnalysisResult {
   detected: boolean;
   totalDetections: number;
   boxes: DetectionBox[];
   vehicles: DetectionBox[];
   persons: DetectionBox[];
+  riders?: RiderDetection[];
+  plateMatch?: PlateMatchResult | null;
   helmetClassificationAvailable: boolean;
   helmetClassificationMessage: string;
   isCandidateViolation: boolean;
@@ -267,4 +297,5 @@ export interface DetectionAnalysisResult {
   isDeduplicated?: boolean;
   cooldownSecondsRemaining?: number | null;
 }
+
 

@@ -20,7 +20,8 @@ import { useApp } from '../../context';
 import { cameraService } from '../../services/cameraService';
 import { apiClient } from '../../services/api';
 import type { CameraDevice } from '../../services/cameraService';
-import type { BoundingBox, ViolationCase, DetectionAnalysisResult } from '../../types';
+import type { BoundingBox, ViolationCase, DetectionAnalysisResult, RiderDetection, PlateMatchResult } from '../../types';
+import { EvidenceCropImage } from '../../components/common/EvidenceCropImage';
 
 export const CameraOperatorPage: React.FC = () => {
   const { addNewCapturedCase, addToast, currentUser } = useApp();
@@ -102,6 +103,8 @@ export const CameraOperatorPage: React.FC = () => {
     helmetClassificationAvailable: boolean;
     helmetClassificationMessage: string;
     boxes: BoundingBox[];
+    riders?: RiderDetection[];
+    plateMatch?: PlateMatchResult | null;
   } | null>(null);
 
   // Fetch model status
@@ -187,6 +190,12 @@ export const CameraOperatorPage: React.FC = () => {
           title: 'Roboflow Error',
           message: res.error || 'Remote Roboflow detection service failed.'
         });
+      } else if (res.errorCode === 'NETWORK_ERROR') {
+        addToast({
+          type: 'error',
+          title: 'Backend Connection Failed',
+          message: res.error || 'Unable to connect to FastAPI backend at http://127.0.0.1:8000.'
+        });
       }
       return;
     }
@@ -251,7 +260,9 @@ export const CameraOperatorPage: React.FC = () => {
             action: 'CREATED',
             notes: `Candidate frame analyzed via Roboflow Hosted Inference. Detected: ${det.violationType}. Queued with status PENDING_REVIEW.`
           }
-        ]
+        ],
+        riders: det.riders,
+        plateMatch: det.plateMatch
       };
       addNewCapturedCase(candidateCase);
     }
@@ -281,7 +292,9 @@ export const CameraOperatorPage: React.FC = () => {
       processingTimeMs: det.processingTimeMs,
       helmetClassificationAvailable: det.helmetClassificationAvailable,
       helmetClassificationMessage: det.helmetClassificationMessage,
-      boxes: uiBoxes
+      boxes: uiBoxes,
+      riders: det.riders,
+      plateMatch: det.plateMatch
     });
   }, [addNewCapturedCase, addToast, currentUser?.name, selectedDeviceId, selectedSourceType]);
 
@@ -310,11 +323,13 @@ export const CameraOperatorPage: React.FC = () => {
         ? 'Laptop Operator Live Webcam' 
         : selectedSourceType === 'IP_CAMERA' 
           ? 'MG Road IP Cam 01' 
-          : 'Koramangala CCTV Stream';
+          : 'CCTV Traffic Cam 02';
+      // Only send camera_id if it is a valid 24-character hexadecimal MongoDB ObjectId
+      const validCameraId = /^[0-9a-fA-F]{24}$/.test(selectedDeviceId) ? selectedDeviceId : undefined;
 
       const res = await cameraService.analyzeFrame(
         blob,
-        selectedDeviceId,
+        validCameraId,
         sourceLabel,
         cooldownSecondsRef.current
       );
@@ -342,7 +357,8 @@ export const CameraOperatorPage: React.FC = () => {
     }
   }, [processInferenceResponse, selectedDeviceId, selectedSourceType]);
 
-  // Self-scheduling timer loop ensuring zero request overlap
+  // Self-scheduling timer loop ensuring zero request overlap without circular reference
+  const scheduleNextCaptureRef = useRef<() => void>(() => {});
   const scheduleNextCapture = useCallback(() => {
     if (!isMonitoringRef.current) return;
     if (timerRef.current) {
@@ -355,15 +371,45 @@ export const CameraOperatorPage: React.FC = () => {
       if (!isMonitoringRef.current) return;
       await executeCaptureCycle();
       if (isMonitoringRef.current) {
-        scheduleNextCapture();
+        scheduleNextCaptureRef.current();
       }
     }, intervalMs);
   }, [executeCaptureCycle]);
+
+  useEffect(() => {
+    scheduleNextCaptureRef.current = scheduleNextCapture;
+  }, [scheduleNextCapture]);
 
   // Start continuous automatic monitoring
   const handleStartMonitoring = async () => {
     setErrorMessage(null);
     setErrorDetails([]);
+
+    // 1. Validate source mode (Webcam required for browser canvas frame capture)
+    if (selectedSourceType !== 'WEBCAM') {
+      const msg = 'Automated periodic camera capture operates on local workstation hardware (Integrated Webcam). External IP camera / CCTV feeds require network stream capture agents. Please switch Source to "Integrated Webcam" or use "Upload Image File" for network surveillance frames.';
+      setErrorMessage(msg);
+      addToast({
+        type: 'warning',
+        title: 'Local Webcam Required',
+        message: 'Switch Source to "Integrated Webcam" for live periodic monitoring.'
+      });
+      return;
+    }
+
+    // 2. Validate authentication token before launching capture loop
+    if (!apiClient.getAuthToken()) {
+      setShowAuthModal(true);
+      const msg = 'Staff authentication token required. Please authenticate with officer credentials to invoke POST /api/v1/detections/analyze.';
+      setErrorMessage(msg);
+      addToast({
+        type: 'warning',
+        title: 'Authentication Required',
+        message: msg
+      });
+      return;
+    }
+
     if (!videoRef.current) return;
 
     try {
@@ -1132,6 +1178,120 @@ export const CameraOperatorPage: React.FC = () => {
                     </div>
                   </div>
                 )}
+
+                {/* Rider Evidence Crops */}
+                <div className="space-y-2 pt-2 border-t border-slate-100">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-[11px] text-slate-800 flex items-center gap-1.5">
+                      <Layers className="w-3.5 h-3.5 text-blue-600" />
+                      Detected Rider Crops ({lastDetectionResult.riders?.length || 0})
+                    </span>
+                    {lastDetectionResult.riders && lastDetectionResult.riders.length > 0 && (
+                      <span className="text-[10px] text-slate-500 font-medium">
+                        {lastDetectionResult.riders.filter(r => r.isViolation).length} violation candidate(s)
+                      </span>
+                    )}
+                  </div>
+
+                  {lastDetectionResult.riders && lastDetectionResult.riders.length > 0 ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      {lastDetectionResult.riders.map((rider, idx) => (
+                        <div key={rider.detectionId || idx} className="space-y-1">
+                          <EvidenceCropImage
+                            src={rider.cropPath}
+                            alt={rider.label}
+                            label={`Rider #${idx + 1}`}
+                            subtitle={rider.detectionId}
+                            confidence={rider.confidence}
+                            aspectRatio="aspect-4/3"
+                            badge={
+                              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                                rider.classification === 'WITHOUT_HELMET'
+                                  ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                                  : rider.classification === 'WITH_HELMET'
+                                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                    : 'bg-slate-100 text-slate-700 border border-slate-300'
+                              }`}>
+                                {rider.classification === 'WITHOUT_HELMET' 
+                                  ? 'NO HELMET' 
+                                  : rider.classification === 'WITH_HELMET' 
+                                    ? 'WITH HELMET' 
+                                    : 'UNKNOWN'}
+                              </span>
+                            }
+                          />
+                          <div className="flex items-center justify-between text-[10px] text-slate-500 px-1 font-mono">
+                            <span>BBox: [{rider.bbox?.map(n => Math.round(n)).join(', ')}]</span>
+                            {rider.isViolation && (
+                              <span className="text-rose-600 font-bold uppercase text-[9px]">Flagged</span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-center text-[11px] text-slate-400">
+                      No distinct rider bounding boxes detected in this frame.
+                    </div>
+                  )}
+                </div>
+
+                {/* License Plate Recognition & Crop */}
+                <div className="space-y-2 pt-2 border-t border-slate-100">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-[11px] text-slate-800 flex items-center gap-1.5">
+                      <Radio className="w-3.5 h-3.5 text-amber-600" />
+                      License Plate Recognition &amp; Crop
+                    </span>
+                    {lastDetectionResult.plateMatch?.matchStatus && (
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                        lastDetectionResult.plateMatch.matchStatus === 'VERIFIED'
+                          ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                          : 'bg-amber-100 text-amber-800 border border-amber-300'
+                      }`}>
+                        {lastDetectionResult.plateMatch.matchStatus.replace('_', ' ')}
+                      </span>
+                    )}
+                  </div>
+
+                  {lastDetectionResult.plateMatch?.cropPath || lastDetectionResult.plateMatch?.plateDetected ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 p-2.5 rounded-lg border border-slate-200 bg-slate-50/70 items-center">
+                      <div className="sm:col-span-5">
+                        <EvidenceCropImage
+                          src={lastDetectionResult.plateMatch.cropPath}
+                          alt={lastDetectionResult.plateMatch.normalizedPlate || 'License Plate Crop'}
+                          label="Plate Crop"
+                          confidence={lastDetectionResult.plateMatch.confidence}
+                          aspectRatio="aspect-16/9"
+                          maxHeight="max-h-24"
+                        />
+                      </div>
+                      <div className="sm:col-span-7 space-y-1.5 text-xs">
+                        <div>
+                          <span className="text-[10px] text-slate-400 block font-medium">Extracted Plate:</span>
+                          <span className="font-mono font-bold text-sm text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200 inline-block">
+                            {lastDetectionResult.plateMatch.normalizedPlate || lastDetectionResult.plateMatch.rawText || 'OCR UNRESOLVED'}
+                          </span>
+                        </div>
+                        {lastDetectionResult.plateMatch.ownerNameSnapshot && (
+                          <div className="text-[11px] text-slate-600">
+                            <span className="text-slate-400">Reg Owner:</span> <span className="font-semibold text-slate-800">{lastDetectionResult.plateMatch.ownerNameSnapshot}</span>
+                          </div>
+                        )}
+                        <div className="text-[10px] text-slate-500">
+                          <span>Status: {lastDetectionResult.plateMatch.matchStatus}</span>
+                          {lastDetectionResult.plateMatch.matchSource && (
+                            <span> • Source: {lastDetectionResult.plateMatch.matchSource}</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-center text-[11px] text-slate-400">
+                      No vehicle license plate detected in this frame.
+                    </div>
+                  )}
+                </div>
 
                 <div className="text-xs space-y-1.5 text-slate-600 pt-1">
                   <div className="flex justify-between">

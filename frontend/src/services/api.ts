@@ -1,6 +1,60 @@
-// Central API configuration and request wrapper for TrafficGuard AI
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api/v1';
 
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1';
+/**
+ * Resolves a backend-relative media path (e.g. '/uploads/evidence/...')
+ * or external URL into a fully-qualified URL against the backend origin.
+ * Prevents requests from incorrectly targeting the Vite development server origin.
+ */
+export function getMediaUrl(path?: string | null): string {
+  if (!path) return '';
+  const trimmed = path.trim();
+  if (!trimmed) return '';
+  // If already absolute or blob/data URI, return directly
+  if (
+    trimmed.startsWith('http://') ||
+    trimmed.startsWith('https://') ||
+    trimmed.startsWith('blob:') ||
+    trimmed.startsWith('data:')
+  ) {
+    return trimmed;
+  }
+  // If path is a local file pseudo-protocol from write failures, cannot be fetched over HTTP
+  if (trimmed.startsWith('file://')) {
+    return '';
+  }
+  // Strip trailing slashes and /api/v1 prefix from API_BASE_URL to resolve to root backend origin
+  const backendOrigin = API_BASE_URL.replace(/\/api\/v1\/?$/, '').replace(/\/+$/, '');
+  const cleanPath = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  return `${backendOrigin}${cleanPath}`;
+}
+
+/**
+ * Fetches an image securely with Bearer token authentication in the Authorization header.
+ * Token is NEVER appended to query parameters, preventing URL/log credential leakage.
+ * Returns an object URL that caller can revoke via URL.revokeObjectURL when unmounted.
+ */
+export async function fetchAuthenticatedBlobUrl(pathOrUrl: string): Promise<string> {
+  const fullUrl = getMediaUrl(pathOrUrl);
+  if (!fullUrl) throw new Error('Invalid image path');
+
+  const token = apiClient.getAuthToken();
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  const res = await fetch(fullUrl, {
+    method: 'GET',
+    headers,
+  });
+
+  if (!res.ok) {
+    throw new Error(`Failed to load evidence image (HTTP ${res.status} ${res.statusText})`);
+  }
+
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
+}
 
 export interface ApiResponse<T> {
   success: boolean;
@@ -41,7 +95,11 @@ class ApiClient {
 
   getAuthToken(): string | null {
     try {
-      return localStorage.getItem(this.tokenKey);
+      const token = localStorage.getItem(this.tokenKey);
+      if (!token || token === 'null' || token === 'undefined' || !token.trim()) {
+        return null;
+      }
+      return token.trim();
     } catch {
       return null;
     }
@@ -303,9 +361,13 @@ class ApiClient {
         message: json.message,
       };
     } catch (err: any) {
+      const isFetchErr = err?.name === 'TypeError' || (err?.message && /fetch/i.test(err.message));
+      const helpfulMsg = isFetchErr
+        ? `Unable to connect to backend at ${this.baseUrl}${endpoint}. Ensure FastAPI is running at http://127.0.0.1:8000 and CORS permits this origin.`
+        : (err.message || 'Network request failed. Ensure FastAPI backend is running on port 8000.');
       return {
         success: false,
-        error: err.message || 'Network request failed. Ensure FastAPI backend is running on port 8000.',
+        error: helpfulMsg,
         errorCode: 'NETWORK_ERROR',
       };
     }

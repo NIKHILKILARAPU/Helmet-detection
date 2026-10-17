@@ -211,8 +211,11 @@ class CameraService {
     } else {
       formData.append('file', imageFileOrBlob, `webcam_frame_${Date.now()}.jpg`);
     }
-    if (cameraId && cameraId !== 'default') {
-      formData.append('camera_id', cameraId);
+    // Only append camera_id if it's a valid 24-character hex MongoDB ObjectId (registered camera)
+    // Browser media device IDs (e.g. 'cam-0', 'default', device hashes) must not be sent as database camera IDs
+    const isObjectId = /^[0-9a-fA-F]{24}$/.test((cameraId || '').trim());
+    if (cameraId && isObjectId) {
+      formData.append('camera_id', cameraId.trim());
     }
     formData.append('source_label', sourceLabel);
     formData.append('auto_ingest', 'true');

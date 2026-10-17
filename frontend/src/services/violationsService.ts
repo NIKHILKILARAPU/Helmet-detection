@@ -1,5 +1,5 @@
 import type { ViolationCase, ViolationStatus, ViolationType, ReviewAuditLog, BoundingBox } from '../types';
-import { apiClient, API_BASE_URL } from './api';
+import { apiClient, getMediaUrl } from './api';
 
 export interface ViolationFilters {
   status?: ViolationStatus | 'ALL';
@@ -15,11 +15,8 @@ export function mapBackendViolationToCase(doc: any): ViolationCase {
     ? new Date(doc.capturedAt).toISOString().replace('T', ' ').substring(0, 19) 
     : new Date().toISOString().replace('T', ' ').substring(0, 19);
 
-  let evidenceImageUrl = doc.evidence?.imageUrl || doc.evidenceImageUrl || '';
-  if (evidenceImageUrl && evidenceImageUrl.startsWith('/')) {
-    const backendOrigin = API_BASE_URL.replace(/\/api\/v1\/?$/, '');
-    evidenceImageUrl = `${backendOrigin}${evidenceImageUrl}`;
-  }
+  const rawEvidencePath = doc.evidence?.storagePath || doc.evidence?.imageUrl || doc.evidenceImageUrl || '';
+  const evidenceImageUrl = getMediaUrl(rawEvidencePath);
 
   const camera = typeof doc.camera === 'object' && doc.camera !== null ? {
     id: doc.camera.id || String(doc.cameraId || 'CAM-01'),
@@ -70,7 +67,9 @@ export function mapBackendViolationToCase(doc: any): ViolationCase {
     reviewHistory,
     challanDraftNumber: doc.challanDraftNumber,
     draftAmountInr: doc.draftAmountInr,
-    rejectionReason: doc.rejectionReason
+    rejectionReason: doc.rejectionReason,
+    riders: doc.riders,
+    plateMatch: doc.plateMatch
   };
 }
 

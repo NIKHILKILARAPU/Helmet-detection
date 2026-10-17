@@ -6,10 +6,15 @@ import {
   RotateCcw, 
   Camera, 
   Sparkles,
-  Info
+  Info,
+  AlertTriangle,
+  Loader2,
+  Layers
 } from 'lucide-react';
 import type { ViolationCase } from '../../types';
 import { StatusBadge } from './StatusBadge';
+import { getMediaUrl } from '../../services/api';
+import { EvidenceCropImage } from './EvidenceCropImage';
 
 interface EvidenceViewerProps {
   caseData: ViolationCase;
@@ -23,6 +28,8 @@ export const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
   const [showBoxes, setShowBoxes] = useState<boolean>(true);
   const [zoomLevel, setZoomLevel] = useState<number>(1);
   const [selectedBoxId, setSelectedBoxId] = useState<string | null>(null);
+  const [isMainImageLoading, setIsMainImageLoading] = useState<boolean>(true);
+  const [mainImageError, setMainImageError] = useState<boolean>(false);
 
   const handleZoomToggle = () => {
     setZoomLevel(prev => (prev === 1 ? 1.5 : prev === 1.5 ? 2.0 : 1));
@@ -33,8 +40,12 @@ export const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
     setSelectedBoxId(null);
   };
 
+  const resolvedEvidenceUrl = getMediaUrl(caseData.evidenceImageUrl);
+  const ridersWithCrops = (caseData.riders || []).filter(r => Boolean(r.cropPath));
+  const hasPlateCrop = Boolean(caseData.plateMatch?.cropPath);
+
   return (
-    <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
+    <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs space-y-0">
       {/* Top Evidence Controls Bar */}
       <div className="bg-slate-50 px-4 py-3 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
@@ -90,20 +101,62 @@ export const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
 
       {/* Main Image Stage */}
       <div className="relative w-full aspect-16/10 bg-slate-900 overflow-hidden flex items-center justify-center">
+        {/* Loading Spinner */}
+        {isMainImageLoading && !mainImageError && (
+          <div className="absolute inset-0 flex items-center justify-center bg-slate-900 text-slate-400 text-xs gap-2 z-10">
+            <Loader2 className="w-6 h-6 animate-spin text-blue-500" />
+            <span>Loading primary evidence image...</span>
+          </div>
+        )}
+
+        {/* Explicit Error Fallback */}
+        {mainImageError && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950 text-white p-6 text-center z-10 space-y-2">
+            <AlertTriangle className="w-8 h-8 text-rose-500" />
+            <div className="font-bold text-sm text-rose-300">Evidence Frame Failed to Load</div>
+            <div className="text-xs text-slate-400 max-w-sm">
+              The original surveillance capture could not be retrieved from the server.
+            </div>
+            <div className="font-mono text-[11px] text-slate-400 bg-slate-900 px-2 py-1 rounded border border-slate-800 break-all max-w-md">
+              {resolvedEvidenceUrl || caseData.evidenceImageUrl}
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setMainImageError(false);
+                setIsMainImageLoading(true);
+              }}
+              className="mt-2 px-3 py-1 text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg border border-slate-700"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
         <div 
           className="relative w-full h-full transition-transform duration-200 ease-out origin-center select-none"
           style={{ transform: `scale(${zoomLevel})` }}
         >
-          <img
-            src={caseData.evidenceImageUrl}
-            alt={`Evidence for case ${caseData.id}`}
-            className="w-full h-full object-cover"
-          />
+          {resolvedEvidenceUrl && (
+            <img
+              src={resolvedEvidenceUrl}
+              alt={`Evidence for case ${caseData.id}`}
+              onLoad={() => {
+                setIsMainImageLoading(false);
+                setMainImageError(false);
+              }}
+              onError={() => {
+                setIsMainImageLoading(false);
+                setMainImageError(true);
+              }}
+              className="w-full h-full object-cover"
+            />
+          )}
 
           {/* Interactive Bounding Boxes Overlay */}
-          {showBoxes && caseData.boundingBoxes && caseData.boundingBoxes.map(box => {
+          {showBoxes && !mainImageError && caseData.boundingBoxes && caseData.boundingBoxes.map(box => {
             const isSelected = selectedBoxId === box.id;
-            const isNoHelmet = box.label === 'NO_HELMET';
+            const isNoHelmet = box.label === 'Without Helmet' || box.label === 'NO_HELMET' || box.label === 'WITHOUT_HELMET';
 
             return (
               <div
@@ -133,10 +186,70 @@ export const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
         </div>
 
         {/* Timestamp Stamp in lower right */}
-        <div className="absolute bottom-2.5 right-3 bg-black/75 backdrop-blur-xs text-white font-mono text-[11px] px-2.5 py-1 rounded border border-white/10">
+        <div className="absolute bottom-2.5 right-3 bg-black/75 backdrop-blur-xs text-white font-mono text-[11px] px-2.5 py-1 rounded border border-white/10 z-10">
           REC: {caseData.timestamp}
         </div>
       </div>
+
+      {/* Detected Crops Section in Case Detail */}
+      {(ridersWithCrops.length > 0 || hasPlateCrop) && (
+        <div className="p-4 bg-slate-50 border-t border-slate-200 space-y-3">
+          <div className="flex items-center justify-between">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-800 flex items-center gap-1.5">
+              <Layers className="w-3.5 h-3.5 text-blue-600" />
+              Isolated Evidence Crops (Riders &amp; License Plate)
+            </h4>
+            <span className="text-[11px] text-slate-500 font-medium">
+              {ridersWithCrops.length} Rider Crop(s) • {hasPlateCrop ? '1 Plate Crop' : 'No Plate Crop'}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+            {/* Rider Crops */}
+            {ridersWithCrops.map((r, idx) => (
+              <EvidenceCropImage
+                key={r.detectionId || idx}
+                src={r.cropPath}
+                alt={r.label}
+                label={`Rider #${idx + 1}`}
+                subtitle={r.detectionId}
+                confidence={r.confidence}
+                aspectRatio="aspect-square"
+                badge={
+                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                    r.classification === 'WITHOUT_HELMET'
+                      ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                      : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                  }`}>
+                    {r.classification === 'WITHOUT_HELMET' ? 'NO HELMET' : 'WITH HELMET'}
+                  </span>
+                }
+              />
+            ))}
+
+            {/* License Plate Crop */}
+            {hasPlateCrop && (
+              <EvidenceCropImage
+                src={caseData.plateMatch?.cropPath}
+                alt={caseData.plateMatch?.normalizedPlate || 'License Plate'}
+                label="License Plate Crop"
+                subtitle={caseData.plateMatch?.normalizedPlate || 'Unread Plate'}
+                confidence={caseData.plateMatch?.confidence}
+                aspectRatio="aspect-square"
+                badge={
+                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                    caseData.plateMatch?.matchStatus === 'VERIFIED'
+                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                      : 'bg-amber-100 text-amber-800 border border-amber-300'
+                  }`}>
+                    {caseData.plateMatch?.matchStatus || 'MANUAL REQUIRED'}
+                  </span>
+                }
+              />
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Box details and confidence strip */}
       {showDetails && (
@@ -157,7 +270,7 @@ export const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
 
             <div className="flex items-center gap-2 text-slate-500 text-[11px]">
               <Info className="w-3.5 h-3.5 text-slate-400" />
-              <span>Bounding boxes represent candidate regions detected by YOLO model.</span>
+              <span>Bounding boxes represent candidate regions detected by Roboflow/YOLO engine.</span>
             </div>
           </div>
         </div>
