@@ -308,11 +308,11 @@ class YoloInferenceEngine:
                 x2 = max(0.0, min(float(width), float(x2)))
                 y2 = max(0.0, min(float(height), float(y2)))
 
-                # Normalized coordinates [ymin, xmin, ymax, xmax] (0.0 to 1.0)
-                ymin_n = round(y1 / height, 4)
+                # Normalized coordinates [x1, y1, x2, y2] (0.0 to 1.0)
                 xmin_n = round(x1 / width, 4)
-                ymax_n = round(y2 / height, 4)
+                ymin_n = round(y1 / height, 4)
                 xmax_n = round(x2 / width, 4)
+                ymax_n = round(y2 / height, 4)
 
                 # Percentage coordinates for UI overlay
                 pct_x = round((x1 / width) * 100, 2)
@@ -327,12 +327,16 @@ class YoloInferenceEngine:
                     "category": category,
                     "confidence": round(confidence, 4),
                     "xyxy": [round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1)],
-                    "normalized": [ymin_n, xmin_n, ymax_n, xmax_n],
+                    "normalized": [xmin_n, ymin_n, xmax_n, ymax_n],
                     "coordinates": {
-                        "ymin": ymin_n,
+                        "x1": xmin_n,
+                        "y1": ymin_n,
+                        "x2": xmax_n,
+                        "y2": ymax_n,
                         "xmin": xmin_n,
-                        "ymax": ymax_n,
+                        "ymin": ymin_n,
                         "xmax": xmax_n,
+                        "ymax": ymax_n,
                     },
                     "percentage": {
                         "x": pct_x,

@@ -62,6 +62,16 @@ class RoboflowInferenceEngine:
             2: ROBOFLOW_CLASS_LICENCE,
         }
         self.helmet_classification_supported: bool = True
+        self._client: Optional[httpx.AsyncClient] = None
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        """Returns or provisions a pooled, reusable async HTTP client for inference."""
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(15.0, connect=5.0),
+                limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+            )
+        return self._client
 
     def is_configured(self) -> bool:
         """Returns True if a non-empty API key is configured."""
@@ -177,10 +187,11 @@ class RoboflowInferenceEngine:
             x2 = max(0.0, min(float(width), cx + (bw / 2.0)))
             y2 = max(0.0, min(float(height), cy + (bh / 2.0)))
 
-            ymin_n = round(y1 / height, 4)
+            # Normalized coordinates [x1, y1, x2, y2] (0.0 to 1.0)
             xmin_n = round(x1 / width, 4)
-            ymax_n = round(y2 / height, 4)
+            ymin_n = round(y1 / height, 4)
             xmax_n = round(x2 / width, 4)
+            ymax_n = round(y2 / height, 4)
 
             pct_x = round((x1 / width) * 100, 2)
             pct_y = round((y1 / height) * 100, 2)
@@ -195,12 +206,16 @@ class RoboflowInferenceEngine:
                 "category": category,
                 "confidence": round(confidence, 4),
                 "xyxy": [round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1)],
-                "normalized": [ymin_n, xmin_n, ymax_n, xmax_n],
+                "normalized": [xmin_n, ymin_n, xmax_n, ymax_n],
                 "coordinates": {
-                    "ymin": ymin_n,
+                    "x1": xmin_n,
+                    "y1": ymin_n,
+                    "x2": xmax_n,
+                    "y2": ymax_n,
                     "xmin": xmin_n,
-                    "ymax": ymax_n,
+                    "ymin": ymin_n,
                     "xmax": xmax_n,
+                    "ymax": ymax_n,
                 },
                 "percentage": {
                     "x": pct_x,
@@ -218,7 +233,8 @@ class RoboflowInferenceEngine:
             elif category == "HELMET_COMPLIANT":
                 compliant_boxes.append(box_obj)
             elif category == "LICENSE_PLATE":
-                vehicles.append(box_obj)
+                # Distinct licence plate region; NEVER falsely represented as a vehicle
+                pass
             elif category == "VEHICLE":
                 vehicles.append(box_obj)
             elif category == "PERSON":
@@ -297,13 +313,13 @@ class RoboflowInferenceEngine:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                response = await client.post(
-                    url,
-                    params=params,
-                    content=base64_payload,
-                    headers={"Content-Type": "application/x-www-form-urlencoded"},
-                )
+            client = await self._get_client()
+            response = await client.post(
+                url,
+                params=params,
+                content=base64_payload,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
         except httpx.TimeoutException:
             logger.error("Roboflow inference request timed out after 15 seconds.")
             raise RemoteInferenceError(

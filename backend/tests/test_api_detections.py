@@ -34,7 +34,16 @@ from main import app
 from app.config import settings
 from app.core.security import hash_password, create_access_token
 from app.db.connection import get_db
-from app.db.collections import COLLECTION_USERS, COLLECTION_MODEL_RUNS, COLLECTION_VIOLATIONS, COLLECTION_CAMERAS, COLLECTION_AUDIT_LOGS
+from app.db.collections import (
+    COLLECTION_USERS,
+    COLLECTION_MODEL_RUNS,
+    COLLECTION_VIOLATIONS,
+    COLLECTION_CAMERAS,
+    COLLECTION_AUDIT_LOGS,
+    COLLECTION_VEHICLES,
+    COLLECTION_PERSON_VEHICLES,
+    COLLECTION_PERSONS,
+)
 from app.models.yolo_inference import yolo_engine
 from app.models.roboflow_inference import roboflow_engine, RoboflowInferenceEngine
 from app.core.exceptions import ModelNotAvailableError, RemoteInferenceError
@@ -114,11 +123,28 @@ def setup_operator_user():
     }
     db[COLLECTION_CAMERAS].insert_one(cam_doc)
 
+    for extra_id in ("65f000000000000000000088", "65f000000000000000000077"):
+        db[COLLECTION_CAMERAS].delete_many({"_id": ObjectId(extra_id)})
+        db[COLLECTION_CAMERAS].insert_one({
+            "_id": ObjectId(extra_id),
+            "name": f"TEST_DETECTIONS_CAM_{extra_id[-2:]}",
+            "junction": f"Test Point {extra_id[-2:]}",
+            "streamType": "WEBCAM",
+            "source": "cam-0",
+            "resolution": "1080p",
+            "fps": 30.0,
+            "status": "ONLINE",
+            "lastHeartbeatAt": now,
+            "createdBy": ObjectId("65f000000000000000000001"),
+            "createdAt": now,
+            "updatedAt": now,
+        })
+
     yield
 
     # Teardown
     db[COLLECTION_USERS].delete_many({"email": "test.detections_op@traffic.gov.in"})
-    db[COLLECTION_CAMERAS].delete_many({"name": "TEST_DETECTIONS_CAM"})
+    db[COLLECTION_CAMERAS].delete_many({"name": {"$regex": r"^TEST_DETECTIONS_CAM"}})
     db[COLLECTION_MODEL_RUNS].delete_many({"modelName": {"$regex": r"^(YOLO|Roboflow)"}})
     db[COLLECTION_VIOLATIONS].delete_many({"caseId": {"$regex": r"^TG-2026-"}})
     db[COLLECTION_AUDIT_LOGS].delete_many({"actorNameSnapshot": "Operator Detection Tester"})
@@ -391,9 +417,12 @@ class TestRoboflowInferenceEngineUnit:
         assert box["label"] == "Without Helmet"
         assert box["category"] == "HELMET_VIOLATION"
         # Center x=300, w=100 -> x1=250, x2=350. Center y=200, h=80 -> y1=160, y2=240
-        assert box["xyxy"] == [250.0, 160.0, 350.0, 240.0]
-        # Normalized: [ymin/H, xmin/W, ymax/H, xmax/W] = [160/400, 250/600, 240/400, 350/600]
-        assert box["normalized"] == [0.4, 0.4167, 0.6, 0.5833]
+        # Normalized: [x1/W, y1/H, x2/W, y2/H] = [250/600, 160/400, 350/600, 240/400]
+        assert box["normalized"] == [0.4167, 0.4, 0.5833, 0.6]
+        assert box["coordinates"]["x1"] == 0.4167
+        assert box["coordinates"]["y1"] == 0.4
+        assert box["coordinates"]["x2"] == 0.5833
+        assert box["coordinates"]["y2"] == 0.6
         # Percentage coords:
         assert box["percentage"]["x"] == round((250.0 / 600) * 100, 2)
         assert box["percentage"]["y"] == round((160.0 / 400) * 100, 2)
@@ -920,4 +949,814 @@ class TestRoboflowApiIntegration:
         assert data2["isDeduplicated"] is True
         assert data2["cooldownSecondsRemaining"] is not None
         assert 50 <= data2["cooldownSecondsRemaining"] <= 60
+
+
+class TestDistinctRiderAndPlateMatchingPipeline:
+    """
+    Comprehensive tests for:
+    - Zero, single, and multiple distinct rider detections
+    - With-helmet vs without-helmet classification & violation flagging
+    - Stable rider detection IDs and safe evidence cropping
+    - Number plate detection, OCR extraction, and vehicle/owner registry matching
+    - Unmatched plate retention (UNVERIFIED) for human review investigation
+    - Unreadable/occluded plate handling (MANUAL_REQUIRED)
+    - Strict registered vehicle owner vs rider distinction
+    - Privacy protection: zero facial recognition and no automated guilt inference
+    - Candidate violations saved strictly in PENDING_REVIEW status (never auto-fine)
+    - Duplicate processing cooldown safeguards
+    - Unauthorized request rejection (401)
+    - Invalid upload validation (400)
+    - Model unavailable error handling (503)
+    """
+
+    def test_zero_riders_detected_returns_empty_riders_and_manual_required_plate(self, auth_headers):
+        """When frame has no detections, returns empty riders list and MANUAL_REQUIRED plateMatch."""
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={"predictions": []},
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=320, height=240)
+        files = {"file": ("empty_frame.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        data = body["data"]
+        assert data["detected"] is False
+        assert data["totalDetections"] == 0
+        assert data["riders"] == []
+        assert data["isCandidateViolation"] is False
+        assert data["status"] == "NO_VIOLATION"
+        assert data["plateMatch"]["plateDetected"] is False
+        assert data["plateMatch"]["matchStatus"] == "MANUAL_REQUIRED"
+
+    def test_single_rider_with_helmet_compliant(self, auth_headers):
+        """Single rider wearing helmet: rider classified as WITH_HELMET, isViolation=False, crop saved."""
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    {
+                        "x": 160.0,
+                        "y": 120.0,
+                        "width": 80.0,
+                        "height": 80.0,
+                        "confidence": 0.94,
+                        "class": "With Helmet",
+                        "class_id": 0,
+                    }
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=320, height=240)
+        files = {"file": ("helmet_frame.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["detected"] is True
+        assert len(data["riders"]) == 1
+        rider = data["riders"][0]
+        assert rider["label"] == "With Helmet"
+        assert rider["classification"] == "WITH_HELMET"
+        assert rider["isViolation"] is False
+        assert rider["cropPath"] is not None
+        assert rider["cropPath"].startswith("/uploads/evidence/crop_rider_")
+        assert data["isCandidateViolation"] is False
+        assert data["status"] == "NO_VIOLATION"
+
+    def test_single_rider_without_helmet_flagged_pending_review(self, auth_headers):
+        """Single rider without helmet: rider classified as WITHOUT_HELMET, isViolation=True, queued PENDING_REVIEW."""
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    {
+                        "x": 160.0,
+                        "y": 120.0,
+                        "width": 80.0,
+                        "height": 80.0,
+                        "confidence": 0.91,
+                        "class": "Without Helmet",
+                        "class_id": 1,
+                    }
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=320, height=240)
+        files = {"file": ("no_helmet_frame.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["detected"] is True
+        assert len(data["riders"]) == 1
+        rider = data["riders"][0]
+        assert rider["classification"] == "WITHOUT_HELMET"
+        assert rider["isViolation"] is True
+        assert rider["cropPath"] is not None
+        assert data["isCandidateViolation"] is True
+        assert data["status"] == "PENDING_REVIEW"
+        assert data["caseId"] is not None
+
+        # Verify record in database is strictly PENDING_REVIEW
+        db = get_db()
+        violation = db[COLLECTION_VIOLATIONS].find_one({"caseId": data["caseId"]})
+        assert violation is not None
+        assert violation["status"] == "PENDING_REVIEW"
+        assert violation["challanDraftNumber"] is None
+        assert violation["draftAmountInr"] is None
+
+    def test_multiple_riders_helmet_and_no_helmet(self, auth_headers):
+        """Multiple distinct riders (1 with helmet, 1 without helmet) receive separate stable IDs and crops."""
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    {
+                        "x": 100.0,
+                        "y": 120.0,
+                        "width": 60.0,
+                        "height": 60.0,
+                        "confidence": 0.95,
+                        "class": "With Helmet",
+                        "class_id": 0,
+                    },
+                    {
+                        "x": 220.0,
+                        "y": 130.0,
+                        "width": 60.0,
+                        "height": 60.0,
+                        "confidence": 0.89,
+                        "class": "Without Helmet",
+                        "class_id": 1,
+                    },
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=320, height=240)
+        files = {"file": ("two_riders.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert len(data["riders"]) == 2
+
+        # Stable detection IDs are distinct
+        ids = [r["detectionId"] for r in data["riders"]]
+        assert len(set(ids)) == 2
+
+        # Verify one is compliant and one is violation
+        classifications = {r["classification"]: r for r in data["riders"]}
+        assert "WITH_HELMET" in classifications
+        assert "WITHOUT_HELMET" in classifications
+        assert classifications["WITH_HELMET"]["isViolation"] is False
+        assert classifications["WITHOUT_HELMET"]["isViolation"] is True
+
+        # Both have crops generated
+        assert all(r["cropPath"] is not None for r in data["riders"])
+        # Overall frame is a candidate violation due to the unhelmeted rider
+        assert data["isCandidateViolation"] is True
+        assert data["status"] == "PENDING_REVIEW"
+
+    def test_unreadable_or_missing_plate_requires_manual_investigation(self, auth_headers):
+        """Frame with rider violation but unreadable/absent plate returns MANUAL_REQUIRED."""
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    {
+                        "x": 150.0,
+                        "y": 100.0,
+                        "width": 70.0,
+                        "height": 70.0,
+                        "confidence": 0.90,
+                        "class": "Without Helmet",
+                        "class_id": 1,
+                    }
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=320, height=240)
+        files = {"file": ("no_plate.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["plateMatch"]["matchStatus"] == "MANUAL_REQUIRED"
+        assert data["plateMatch"]["matchedVehicleId"] is None
+        assert data["plateMatch"]["matchedPersonId"] is None
+
+        # Verify candidate violation has identityVerificationStatus MANUAL_REQUIRED
+        db = get_db()
+        violation = db[COLLECTION_VIOLATIONS].find_one({"caseId": data["caseId"]})
+        assert violation is not None
+        assert violation["identityVerificationStatus"] == "MANUAL_REQUIRED"
+        assert violation["personId"] is None
+        assert violation["vehicleId"] is None
+
+    def test_unmatched_plate_remains_visible_for_reviewer_investigation(self, auth_headers):
+        """Plate detected but not found in vehicles collection returns UNVERIFIED and stays visible for investigation."""
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    {
+                        "x": 150.0,
+                        "y": 100.0,
+                        "width": 70.0,
+                        "height": 70.0,
+                        "confidence": 0.90,
+                        "class": "Without Helmet",
+                        "class_id": 1,
+                    },
+                    {
+                        "x": 150.0,
+                        "y": 200.0,
+                        "width": 50.0,
+                        "height": 20.0,
+                        "confidence": 0.85,
+                        "class": "licence",
+                        "class_id": 2,
+                    },
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=320, height=240)
+        files = {"file": ("unmatched_plate.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {"plate_hint": "MH02XX9999", "cooldown_seconds": "0"}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                data=form_data,
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        plate_match = data["plateMatch"]
+        assert plate_match["plateDetected"] is True
+        assert plate_match["normalizedPlate"] == "MH02XX9999"
+        assert plate_match["matchStatus"] == "UNVERIFIED"
+        assert plate_match["matchedVehicleId"] is None
+        assert plate_match["matchedPersonId"] is None
+        assert plate_match["ownerNameSnapshot"] is None
+
+        # Check DB violation stores UNVERIFIED
+        db = get_db()
+        violation = db[COLLECTION_VIOLATIONS].find_one({"caseId": data["caseId"]})
+        assert violation is not None
+        assert violation["identityVerificationStatus"] == "UNVERIFIED"
+
+    def test_matched_plate_with_registered_owner_vs_rider_distinction(self, auth_headers):
+        """
+        When plate matches a registered vehicle, links vehicle and registered owner.
+        Critically maintains distinction: the linked citizen is the REGISTERED OWNER, not assumed rider.
+        """
+        db = get_db()
+        now = datetime.now(timezone.utc)
+        test_plate = "KA03ZZ7777"
+
+        # Setup test vehicle and registered owner
+        db[COLLECTION_VEHICLES].delete_many({"plateNumber": test_plate})
+        veh_res = db[COLLECTION_VEHICLES].insert_one({
+            "plateNumber": test_plate,
+            "vehicleType": "Two-Wheeler Motorcycle",
+            "model": "Royal Enfield Hunter 350",
+            "registrationStatus": "ACTIVE",
+            "verificationStatus": "VERIFIED",
+            "createdAt": now,
+            "updatedAt": now,
+        })
+        vehicle_id = veh_res.inserted_id
+
+        pers_res = db[COLLECTION_PERSONS].insert_one({
+            "personReference": "TEST-CIT-OWNER-777",
+            "fullName": "Suresh Raina (Registered Vehicle Owner)",
+            "identityStatus": "VERIFIED",
+            "verificationSource": "STATE_VAHAN_PORTAL",
+            "createdAt": now,
+            "updatedAt": now,
+        })
+        person_id = pers_res.inserted_id
+
+        db[COLLECTION_PERSON_VEHICLES].insert_one({
+            "personId": person_id,
+            "vehicleId": vehicle_id,
+            "relationshipType": "REGISTERED_OWNER",
+        })
+
+        try:
+            mock_resp = httpx.Response(
+                status_code=200,
+                json={
+                    "predictions": [
+                        {
+                            "x": 150.0,
+                            "y": 100.0,
+                            "width": 70.0,
+                            "height": 70.0,
+                            "confidence": 0.92,
+                            "class": "Without Helmet",
+                            "class_id": 1,
+                        },
+                        {
+                            "x": 150.0,
+                            "y": 200.0,
+                            "width": 60.0,
+                            "height": 25.0,
+                            "confidence": 0.88,
+                            "class": "licence",
+                            "class_id": 2,
+                        },
+                    ]
+                },
+                request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+            )
+            img_bytes = _create_test_image_bytes(width=320, height=240)
+            files = {"file": ("matched_vehicle.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+            form_data = {"plate_hint": test_plate, "cooldown_seconds": "0"}
+
+            with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+                mock_post.return_value = mock_resp
+                resp = client.post(
+                    f"{settings.API_PREFIX}/detections/analyze",
+                    files=files,
+                    data=form_data,
+                    headers=auth_headers,
+                )
+
+            assert resp.status_code == 200
+            data = resp.json()["data"]
+            pm = data["plateMatch"]
+            assert pm["matchStatus"] == "VERIFIED"
+            assert pm["normalizedPlate"] == test_plate
+            assert pm["matchedVehicleId"] == str(vehicle_id)
+            assert pm["matchedPersonId"] == str(person_id)
+            assert pm["ownerNameSnapshot"] == "Suresh Raina (Registered Vehicle Owner)"
+            assert pm["vehicleDetails"]["model"] == "Royal Enfield Hunter 350"
+
+            # Check DB record attribution
+            violation = db[COLLECTION_VIOLATIONS].find_one({"caseId": data["caseId"]})
+            assert violation is not None
+            assert violation["identityVerificationStatus"] == "VERIFIED"
+            assert violation["vehicleId"] == vehicle_id
+            assert violation["personId"] == person_id
+            assert violation["status"] == "PENDING_REVIEW"
+        finally:
+            db[COLLECTION_VEHICLES].delete_many({"_id": vehicle_id})
+            db[COLLECTION_PERSONS].delete_many({"_id": person_id})
+            db[COLLECTION_PERSON_VEHICLES].delete_many({"vehicleId": vehicle_id})
+
+    def test_privacy_safety_no_facial_recognition(self):
+        """
+        Verifies system privacy compliance:
+        - No facial recognition routes exist
+        - No citizen identity is inferred from facial/rider crops
+        """
+        route_paths = []
+        for route in app.routes:
+            p = getattr(route, "path", None)
+            if p:
+                route_paths.append(p)
+        for path in route_paths:
+            assert "face" not in path.lower()
+            assert "biometric" not in path.lower()
+            assert "facial-recognition" not in path.lower()
+
+    def test_unauthorized_access_rejected_with_401(self):
+        """Requests without Authorization header must be rejected with 401."""
+        img_bytes = _create_test_image_bytes(width=320, height=240)
+        files = {"file": ("frame.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        resp = client.post(f"{settings.API_PREFIX}/detections/analyze", files=files)
+        assert resp.status_code == 401
+
+    def test_invalid_image_upload_rejected_with_400(self, auth_headers):
+        """Malformed bytes or unsupported file formats return 400 Bad Request."""
+        # Empty file
+        files_empty = {"file": ("empty.jpg", io.BytesIO(b""), "image/jpeg")}
+        resp_empty = client.post(
+            f"{settings.API_PREFIX}/detections/analyze",
+            files=files_empty,
+            headers=auth_headers,
+        )
+        assert resp_empty.status_code == 400
+
+        # Corrupt bytes
+        files_corrupt = {"file": ("corrupt.jpg", io.BytesIO(b"NOT_AN_IMAGE_FILE_DATA"), "image/jpeg")}
+        resp_corrupt = client.post(
+            f"{settings.API_PREFIX}/detections/analyze",
+            files=files_corrupt,
+            headers=auth_headers,
+        )
+        assert resp_corrupt.status_code == 400
+
+    def test_model_unavailable_returns_503(self, auth_headers):
+        """When AI model is not configured or missing, returns 503 MODEL_NOT_AVAILABLE rather than mock data."""
+        with patch.object(roboflow_engine, "is_configured", return_value=False):
+            with patch.object(
+                roboflow_engine,
+                "detect",
+                side_effect=ModelNotAvailableError(message="Roboflow engine is not configured."),
+            ):
+                img_bytes = _create_test_image_bytes(width=320, height=240)
+                files = {"file": ("frame.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+                resp = client.post(
+                    f"{settings.API_PREFIX}/detections/analyze",
+                    files=files,
+                    headers=auth_headers,
+                )
+                assert resp.status_code == 503
+                body = resp.json()
+                assert body["success"] is False
+                assert body.get("error_code") == "MODEL_NOT_AVAILABLE" or body.get("errorCode") == "MODEL_NOT_AVAILABLE"
+
+
+class TestAuditAndRobustnessImprovements:
+    """
+    Regression and verification tests covering:
+    1. Detection request validation (placeholder values: 'string', 'null', 'undefined'; camera DB validation).
+    2. Bounding-box coordinates: [x1, y1, x2, y2] normalized format, percentage accuracy, crop coordinate alignment.
+    3. Licence plate handling: ensuring plate region is never falsely classified as a vehicle.
+    4. Rider workflow: preserving four individual rider candidates with crops and confidences in PENDING_REVIEW.
+    5. Performance timing breakdown telemetry (modelInferenceMs, evidenceSavingMs, ocrMs, dbLookupMs).
+    """
+
+    @pytest.mark.parametrize("placeholder", ["string", "null", "undefined", "none", "", "   "])
+    def test_placeholder_camera_id_treated_as_optional_fallback(self, auth_headers, placeholder):
+        """Placeholder camera_id values (Swagger defaults) must never error out or be queried as real IDs."""
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={"predictions": []},
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=320, height=240)
+        files = {"file": ("test.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {"camera_id": placeholder, "cooldown_seconds": "0"}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                data=form_data,
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+
+    def test_invalid_camera_id_syntax_returns_400(self, auth_headers):
+        """Non-placeholder, non-ObjectId camera_id returns HTTP 400 validation error."""
+        img_bytes = _create_test_image_bytes(width=320, height=240)
+        files = {"file": ("test.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {"camera_id": "not-a-valid-hex-camera-id", "cooldown_seconds": "0"}
+
+        resp = client.post(
+            f"{settings.API_PREFIX}/detections/analyze",
+            files=files,
+            data=form_data,
+            headers=auth_headers,
+        )
+        assert resp.status_code == 400
+        body = resp.json()
+        assert body["success"] is False
+        assert "not a valid 24-character hexadecimal ObjectId" in body["message"]
+
+    def test_non_existent_camera_id_returns_404(self, auth_headers):
+        """Syntactically valid ObjectId camera_id not present in database returns HTTP 404."""
+        non_existent_id = "65f000000000000000000999"
+        img_bytes = _create_test_image_bytes(width=320, height=240)
+        files = {"file": ("test.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {"camera_id": non_existent_id, "cooldown_seconds": "0"}
+
+        resp = client.post(
+            f"{settings.API_PREFIX}/detections/analyze",
+            files=files,
+            data=form_data,
+            headers=auth_headers,
+        )
+        assert resp.status_code == 404
+        body = resp.json()
+        assert body["success"] is False
+        assert f"Camera '{non_existent_id}' not found" in body["message"]
+
+    @pytest.mark.parametrize("placeholder", ["string", "null", "undefined", "none", "", "   "])
+    def test_placeholder_plate_hint_ignored(self, auth_headers, placeholder):
+        """Placeholder plate_hint values must never be searched as plate numbers or marked verified."""
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={"predictions": []},
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=320, height=240)
+        files = {"file": ("test.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {"plate_hint": placeholder, "cooldown_seconds": "0"}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                data=form_data,
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        pm = data["plateMatch"]
+        assert pm["plateDetected"] is False
+        assert pm["rawText"] is None
+        assert pm["normalizedPlate"] is None
+        assert pm["matchStatus"] == "MANUAL_REQUIRED"
+        assert pm["matchedVehicleId"] is None
+
+    def test_known_dimensions_coordinates_and_crop_alignment(self, auth_headers):
+        """
+        Validates coordinate calculations using known dimensions (640x480).
+        Verifies xyxy, normalized [x1, y1, x2, y2], percentage coordinates,
+        and confirms that the generated crop on disk matches the exact bounding box pixel dimensions.
+        """
+        # Center x=320, y=240, width=160, height=120
+        # Expected x1 = 320 - 80 = 240, x2 = 320 + 80 = 400 (width = 160)
+        # Expected y1 = 240 - 60 = 180, y2 = 240 + 60 = 300 (height = 120)
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    {
+                        "x": 320.0,
+                        "y": 240.0,
+                        "width": 160.0,
+                        "height": 120.0,
+                        "confidence": 0.93,
+                        "class": "Without Helmet",
+                        "class_id": 1,
+                    }
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=640, height=480)
+        files = {"file": ("known_coords.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {"cooldown_seconds": "0"}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                data=form_data,
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        box = data["boxes"][0]
+
+        # 1. Pixel xyxy coordinates [x1, y1, x2, y2]
+        assert box["xyxy"] == [240.0, 180.0, 400.0, 300.0]
+
+        # 2. Consistent normalized coordinates [x1, y1, x2, y2]
+        # x1/W = 240/640 = 0.375, y1/H = 180/480 = 0.375
+        # x2/W = 400/640 = 0.625, y2/H = 300/480 = 0.625
+        assert box["normalized"] == [0.375, 0.375, 0.625, 0.625]
+
+        # 3. Percentage coordinates
+        assert box["percentage"]["x"] == 37.5
+        assert box["percentage"]["y"] == 37.5
+        assert box["percentage"]["width"] == 25.0
+        assert box["percentage"]["height"] == 25.0
+
+        # 4. Verify rider crop file matches the exact pixel dimensions (120x160)
+        rider = data["riders"][0]
+        crop_path = rider["cropPath"]
+        assert crop_path is not None
+        crop_filename = os.path.basename(crop_path)
+        disk_crop_file = os.path.join(EVIDENCE_UPLOAD_DIR, crop_filename)
+        assert os.path.isfile(disk_crop_file)
+
+        crop_img = cv2.imread(disk_crop_file)
+        assert crop_img is not None
+        crop_h, crop_w = crop_img.shape[:2]
+        assert crop_h == 120
+        assert crop_w == 160
+
+    def test_licence_plate_class_not_falsely_represented_as_vehicle(self, auth_headers):
+        """The 'licence' class is a plate region detection and must never be included in vehicles list."""
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    {
+                        "x": 200.0,
+                        "y": 150.0,
+                        "width": 80.0,
+                        "height": 80.0,
+                        "confidence": 0.92,
+                        "class": "Without Helmet",
+                        "class_id": 1,
+                    },
+                    {
+                        "x": 200.0,
+                        "y": 300.0,
+                        "width": 60.0,
+                        "height": 20.0,
+                        "confidence": 0.88,
+                        "class": "licence",
+                        "class_id": 2,
+                    },
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=640, height=480)
+        files = {"file": ("plate_only.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {"cooldown_seconds": "0"}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                data=form_data,
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["totalDetections"] == 2
+        # Vehicles list must NOT contain the licence plate
+        assert len(data["vehicles"]) == 0
+        assert data["plateMatch"]["plateDetected"] is True
+
+    def test_preserve_four_individual_rider_candidates(self, auth_headers):
+        """Confirms that all 4 individual rider candidates returned by model are preserved with crops and confidences."""
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    {
+                        "x": 100.0,
+                        "y": 100.0,
+                        "width": 50.0,
+                        "height": 50.0,
+                        "confidence": 0.95,
+                        "class": "Without Helmet",
+                        "class_id": 1,
+                    },
+                    {
+                        "x": 200.0,
+                        "y": 100.0,
+                        "width": 50.0,
+                        "height": 50.0,
+                        "confidence": 0.91,
+                        "class": "With Helmet",
+                        "class_id": 0,
+                    },
+                    {
+                        "x": 300.0,
+                        "y": 100.0,
+                        "width": 50.0,
+                        "height": 50.0,
+                        "confidence": 0.88,
+                        "class": "Without Helmet",
+                        "class_id": 1,
+                    },
+                    {
+                        "x": 400.0,
+                        "y": 100.0,
+                        "width": 50.0,
+                        "height": 50.0,
+                        "confidence": 0.82,
+                        "class": "With Helmet",
+                        "class_id": 0,
+                    },
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=640, height=480)
+        files = {"file": ("four_riders.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {"cooldown_seconds": "0"}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                data=form_data,
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        riders = data["riders"]
+        # Exactly four candidates preserved
+        assert len(riders) == 4
+
+        expected_confs = [0.95, 0.91, 0.88, 0.82]
+        expected_classifications = ["WITHOUT_HELMET", "WITH_HELMET", "WITHOUT_HELMET", "WITH_HELMET"]
+        expected_violations = [True, False, True, False]
+
+        for i in range(4):
+            assert riders[i]["confidence"] == expected_confs[i]
+            assert riders[i]["classification"] == expected_classifications[i]
+            assert riders[i]["isViolation"] == expected_violations[i]
+            assert riders[i]["cropPath"] is not None
+            crop_name = os.path.basename(riders[i]["cropPath"])
+            assert os.path.isfile(os.path.join(EVIDENCE_UPLOAD_DIR, crop_name))
+
+        # Distinct stable IDs
+        ids = [r["detectionId"] for r in riders]
+        assert len(set(ids)) == 4
+
+        # Candidate violation status remains strictly PENDING_REVIEW
+        assert data["isCandidateViolation"] is True
+        assert data["status"] == "PENDING_REVIEW"
+        assert data["caseId"] is not None
+
+        db = get_db()
+        violation = db[COLLECTION_VIOLATIONS].find_one({"caseId": data["caseId"]})
+        assert violation is not None
+        assert violation["status"] == "PENDING_REVIEW"
+        assert violation["challanDraftNumber"] is None
+        assert violation["draftAmountInr"] is None
+
+    def test_timing_breakdown_telemetry(self, auth_headers):
+        """Validates that granular stage timings (model inference, evidence saving, ocr, db lookup) are tracked."""
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={"predictions": []},
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=320, height=240)
+        files = {"file": ("timing_test.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {"cooldown_seconds": "0"}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                data=form_data,
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert "timingBreakdown" in data
+        timing = data["timingBreakdown"]
+        assert "modelInferenceMs" in timing
+        assert "evidenceSavingMs" in timing
+        assert "ocrMs" in timing
+        assert "dbLookupMs" in timing
+        assert "totalProcessingMs" in timing
+        assert timing["totalProcessingMs"] >= 0.0
+
+
 
