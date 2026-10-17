@@ -1,4 +1,5 @@
 import os
+from typing import Optional
 from pydantic import Field, AliasChoices
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -36,8 +37,31 @@ class Settings(BaseSettings):
     YOLO_MODEL_PATH: str = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "../../../models/yolov8n-traffic.pt")
     )
-    INFERENCE_CONFIDENCE_THRESHOLD: float = 0.65
+    INFERENCE_CONFIDENCE_THRESHOLD: float = 0.50
 
-    model_config = SettingsConfigDict(env_file=".env", extra="allow")
+    # Roboflow Hosted Inference Configuration
+    ROBOFLOW_API_KEY: Optional[str] = Field(
+        default=None,
+        description="Private API key for Roboflow hosted inference (never expose to client)",
+    )
+    ROBOFLOW_MODEL_ID: str = Field(
+        default="helmet-and-no-helmet-rider-detection/6",
+        description="Roboflow hosted model ID (project/version)",
+    )
+    ROBOFLOW_BASE_URL: str = Field(
+        default="https://detect.roboflow.com",
+        description="Base URL for Roboflow hosted inference service",
+    )
+    INFERENCE_PROVIDER: str = Field(
+        default="roboflow",
+        description="Inference engine provider: 'roboflow' or 'local'",
+    )
+
+    model_config = SettingsConfigDict(
+        env_file=(".env", os.path.join(os.path.dirname(__file__), "../.env")),
+        env_file_encoding="utf-8",
+        extra="allow",
+    )
 
 settings = Settings()
+

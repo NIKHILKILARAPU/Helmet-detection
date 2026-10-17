@@ -39,10 +39,12 @@ export const CameraOperatorPage: React.FC = () => {
 
   // Model telemetry state
   const [modelStatus, setModelStatus] = useState<{
+    provider?: string;
     isLoaded: boolean;
     classesCount: number;
     helmetClassificationSupported: boolean;
     modelPath?: string;
+    modelId?: string;
     loadError?: string | null;
   } | null>(null);
 
@@ -203,8 +205,14 @@ export const CameraOperatorPage: React.FC = () => {
       } else if (res.errorCode === 'MODEL_NOT_AVAILABLE') {
         addToast({
           type: 'error',
-          title: 'MODEL_NOT_AVAILABLE',
-          message: 'YOLO model weights are missing from models/ directory.'
+          title: 'Model Not Available',
+          message: res.error || 'AI model weights or Roboflow API key missing.'
+        });
+      } else if (res.errorCode === 'REMOTE_INFERENCE_ERROR' || res.errorCode?.startsWith('ROBOFLOW_')) {
+        addToast({
+          type: 'error',
+          title: 'Roboflow Error',
+          message: res.error || 'Remote Roboflow detection service failed.'
         });
       } else {
         addToast({
@@ -418,20 +426,36 @@ export const CameraOperatorPage: React.FC = () => {
               : 'bg-rose-50 text-rose-700 border-rose-200'
           }`}>
             <Sparkles className="w-3.5 h-3.5" />
-            <span>Model: {modelStatus?.isLoaded ? 'Loaded (CPU)' : 'Weights Missing'}</span>
+            <span>
+              Model: {modelStatus?.isLoaded 
+                ? (modelStatus.provider === 'roboflow' ? 'Roboflow Hosted' : 'Loaded (CPU)') 
+                : 'Not Ready'}
+            </span>
           </div>
         </div>
       </div>
 
-      {/* Model Status Alert Banner when Weights are Absent */}
+      {/* Model Status Alert Banner when Weights/API Key are Absent */}
       {modelStatus && !modelStatus.isLoaded && (
         <div className="bg-amber-50 border border-amber-300 rounded-xl p-4 text-xs text-amber-900 flex items-start gap-3 shadow-xs">
           <ShieldAlert className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
           <div className="space-y-1">
-            <div className="font-bold text-amber-950">AI Model Weights Unavailable (MODEL_NOT_AVAILABLE)</div>
+            <div className="font-bold text-amber-950">
+              {modelStatus.provider === 'roboflow' 
+                ? 'Roboflow API Key Not Configured (MODEL_NOT_AVAILABLE)' 
+                : 'AI Model Weights Unavailable (MODEL_NOT_AVAILABLE)'}
+            </div>
             <p className="text-amber-800 leading-relaxed">
-              Trained computer vision weights are not present at <code className="font-mono font-semibold bg-amber-100 px-1 py-0.5 rounded">models/yolov8n-traffic.pt</code>.
-              TrafficGuard strictly prevents simulated or hardcoded detections in production. Please place trained weights supporting classes <code className="font-mono bg-amber-100 px-1 py-0.5 rounded">helmet, no_helmet, motorcycle, rider</code> into the <code className="font-mono">models/</code> directory.
+              {modelStatus.provider === 'roboflow' ? (
+                <>
+                  Roboflow API key is not configured. Please set <code className="font-mono font-semibold bg-amber-100 px-1 py-0.5 rounded">ROBOFLOW_API_KEY</code> in <code className="font-mono bg-amber-100 px-1 py-0.5 rounded">backend/.env</code> to enable hosted helmet detection ({modelStatus.modelId || 'helmet-and-no-helmet-rider-detection/6'}).
+                </>
+              ) : (
+                <>
+                  Trained computer vision weights are not present at <code className="font-mono font-semibold bg-amber-100 px-1 py-0.5 rounded">models/yolov8n-traffic.pt</code>.
+                  TrafficGuard strictly prevents simulated or hardcoded detections in production. Please place trained weights into the <code className="font-mono">models/</code> directory.
+                </>
+              )}
             </p>
           </div>
         </div>
@@ -517,7 +541,7 @@ export const CameraOperatorPage: React.FC = () => {
 
                 {/* Genuine YOLO Bounding Box Overlays */}
                 {showOverlay && overlayBoxes.map(box => {
-                  const isViolation = box.label === 'NO_HELMET' || box.color === '#DC2626';
+                  const isViolation = box.label === 'NO_HELMET' || box.label === 'WITHOUT_HELMET' || box.color === '#DC2626';
                   return (
                     <div
                       key={box.id}
@@ -668,7 +692,7 @@ export const CameraOperatorPage: React.FC = () => {
                 Inference Result Panel
               </h3>
               <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                GENUINE YOLO INFERENCE
+                {modelStatus?.provider === 'roboflow' ? 'ROBOFLOW HOSTED INFERENCE' : 'GENUINE YOLO INFERENCE'}
               </span>
             </div>
 
@@ -741,7 +765,7 @@ export const CameraOperatorPage: React.FC = () => {
             ) : (
               <div className="p-6 text-center text-slate-400 text-xs bg-slate-50 rounded-xl border border-dashed border-slate-200">
                 <HelpCircle className="w-8 h-8 mx-auto text-slate-300 mb-2" />
-                <span>No frame analyzed yet. Capture a live webcam frame or upload an image file to run genuine YOLO inference.</span>
+                <span>No frame analyzed yet. Capture a live webcam frame or upload an image file to run genuine AI inference.</span>
               </div>
             )}
 
@@ -749,7 +773,11 @@ export const CameraOperatorPage: React.FC = () => {
             <div className="p-3 rounded-lg bg-slate-50/80 border border-slate-200 text-xs space-y-1 text-slate-500">
               <div className="flex justify-between">
                 <span>Model Architecture:</span>
-                <span className="font-medium text-slate-800">YOLOv8n-Traffic (CPU)</span>
+                <span className="font-medium text-slate-800">
+                  {modelStatus?.provider === 'roboflow' 
+                    ? `Roboflow: ${modelStatus.modelId || 'helmet-and-no-helmet-rider-detection/6'}`
+                    : 'YOLOv8n-Traffic (CPU)'}
+                </span>
               </div>
               <div className="flex justify-between">
                 <span>Inference Latency:</span>

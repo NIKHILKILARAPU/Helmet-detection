@@ -17,3 +17,7 @@ __pycache__/
 # Coverage and testing output
 .coverage
 htmlcov/
+
+# Local evidence uploads
+uploads/
+

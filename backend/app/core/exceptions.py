@@ -145,3 +145,22 @@ class ModelNotAvailableError(AppException):
             details=details,
         )
 
+
+class RemoteInferenceError(AppException):
+    """Remote inference service (e.g. Roboflow) failure, timeout, or configuration issue."""
+
+    def __init__(
+        self,
+        message: str = "Remote AI inference service encountered an error.",
+        status_code: int = 502,
+        error_code: str = "REMOTE_INFERENCE_ERROR",
+        details: Optional[List[ErrorDetail]] = None,
+    ) -> None:
+        super().__init__(
+            status_code=status_code,
+            error_code=error_code,
+            message=message,
+            details=details or [],
+        )
+
+

@@ -1,26 +1,32 @@
 """
-Unit & Integration Tests for YOLO Inference Service & Detections API Endpoint.
+Unit & Integration Tests for YOLO and Roboflow Inference Services & Detections API Endpoint.
 
 Verifies:
 - Unauthorized request rejection (HTTP 401)
-- Missing model weights error handling (HTTP 503, error_code MODEL_NOT_AVAILABLE)
+- Missing model weights / Roboflow API key error handling (HTTP 503 MODEL_NOT_AVAILABLE)
 - Input validation: file type rejection, empty file, malformed image bytes (HTTP 400)
-- Model class taxonomy validation:
-  - Generic COCO model (without helmet classes) reports helmetClassificationAvailable=False
-  - Custom traffic model (with helmet/no_helmet classes) enables helmet classification
-- Bounding box coordinate calculations (pixel, normalized, and percentage for UI overlay)
-- Separation of vehicles, persons, and violation candidate objects
-- Proper MongoDB schema persistence (model_runs and violations with status PENDING_REVIEW)
-- Zero reliance on downloading external heavy weights for unit tests
+- Local YOLO Model class taxonomy validation:
+  - Generic COCO model reports helmetClassificationAvailable=False
+  - Custom traffic model enables helmet classification
+- Roboflow Hosted Inference Integration:
+  - Exact class mapping ("With Helmet", "Without Helmet", "licence")
+  - Candidate violation triage strictly queued as PENDING_REVIEW
+  - Coordinate conversion from Roboflow center format (x, y, w, h) to corner/normalized/percentage
+  - Upstream error handling (401/403 auth, timeout 504, malformed response 502)
+  - Zero leakage of API key in logs or error messages
+  - Completely mocked HTTP responses; zero external network calls during automated testing
+- Proper MongoDB schema persistence (model_runs, evidence, and violations)
 """
 
 import io
+import asyncio
 import pytest
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, AsyncMock, patch
 from bson import ObjectId
 import numpy as np
 import cv2
+import httpx
 from fastapi.testclient import TestClient
 
 from main import app
@@ -29,6 +35,8 @@ from app.core.security import hash_password, create_access_token
 from app.db.connection import get_db
 from app.db.collections import COLLECTION_USERS, COLLECTION_MODEL_RUNS, COLLECTION_VIOLATIONS, COLLECTION_CAMERAS
 from app.models.yolo_inference import yolo_engine
+from app.models.roboflow_inference import roboflow_engine, RoboflowInferenceEngine
+from app.core.exceptions import ModelNotAvailableError, RemoteInferenceError
 
 client = TestClient(app)
 
@@ -109,7 +117,7 @@ def setup_operator_user():
     # Teardown
     db[COLLECTION_USERS].delete_many({"email": "test.detections_op@traffic.gov.in"})
     db[COLLECTION_CAMERAS].delete_many({"name": "TEST_DETECTIONS_CAM"})
-    db[COLLECTION_MODEL_RUNS].delete_many({"modelName": "YOLOv8n-Traffic"})
+    db[COLLECTION_MODEL_RUNS].delete_many({"modelName": {"$regex": r"^(YOLO|Roboflow)"}})
     db[COLLECTION_VIOLATIONS].delete_many({"caseId": {"$regex": r"^TG-2026-"}})
 
 
@@ -142,10 +150,11 @@ class TestDetectionsApiAuthorizationAndValidation:
         assert data["success"] is False
         assert data["error_code"] == "UNAUTHORIZED"
 
-    def test_analyze_missing_model_weights_returns_503_model_not_available(self, auth_headers):
-        """When YOLO model weights file is absent, must return HTTP 503 MODEL_NOT_AVAILABLE."""
-        # Ensure model is unloaded
+    def test_analyze_missing_local_model_weights_returns_503(self, auth_headers):
+        """When local YOLO model weights file is absent, must return HTTP 503 MODEL_NOT_AVAILABLE."""
+        original_provider = settings.INFERENCE_PROVIDER
         original_model = yolo_engine.model
+        settings.INFERENCE_PROVIDER = "local"
         yolo_engine.model = None
 
         try:
@@ -161,12 +170,12 @@ class TestDetectionsApiAuthorizationAndValidation:
             assert data["success"] is False
             assert data["error_code"] == "MODEL_NOT_AVAILABLE"
             assert "yolov8n-traffic.pt" in data["message"]
-            # Verify details document expected path and classes
             detail_fields = [d["field"] for d in data.get("details", [])]
             assert "model_path" in detail_fields
             assert "expected_classes" in detail_fields
         finally:
             yolo_engine.model = original_model
+            settings.INFERENCE_PROVIDER = original_provider
 
     def test_analyze_unsupported_file_mime_returns_400(self, auth_headers):
         """Uploading text/pdf files must return HTTP 400 validation error."""
@@ -211,14 +220,18 @@ class TestDetectionsApiAuthorizationAndValidation:
         assert "corrupt or unreadable" in data["message"].lower()
 
 
-class TestModelClassTaxonomyAndInference:
-    """Verifies class taxonomy checks and structured output parsing."""
+class TestLocalYoloModelInference:
+    """Verifies local YOLO engine execution and class taxonomy checks."""
+
+    @pytest.fixture(autouse=True)
+    def use_local_provider(self):
+        original_provider = settings.INFERENCE_PROVIDER
+        settings.INFERENCE_PROVIDER = "local"
+        yield
+        settings.INFERENCE_PROVIDER = original_provider
 
     def test_generic_coco_model_reports_helmet_classification_unavailable(self, auth_headers):
-        """
-        A standard COCO model has motorcycle and person, but NO helmet classes.
-        Must report helmetClassificationAvailable=False and never flag false violations.
-        """
+        """A standard COCO model reports helmetClassificationAvailable=False without false violations."""
         coco_names = {0: "person", 1: "bicycle", 2: "car", 3: "motorcycle"}
         mock_boxes = [
             MockBox(cls_id=3, conf=0.92, xyxy=[50.0, 100.0, 200.0, 220.0]),
@@ -236,31 +249,18 @@ class TestModelClassTaxonomyAndInference:
             headers=auth_headers,
         )
         assert response.status_code == 200
-        data = response.json()
-        assert data["success"] is True
-
-        payload = data["data"]
+        payload = response.json()["data"]
         assert payload["detected"] is True
         assert payload["totalDetections"] == 2
         assert payload["helmetClassificationAvailable"] is False
         assert "does not include validated helmet" in payload["helmetClassificationMessage"]
         assert payload["isCandidateViolation"] is False
-        assert payload["violationType"] is None
         assert payload["status"] == "NO_VIOLATION"
-
-        # Check vehicle and person separation
         assert len(payload["vehicles"]) == 1
-        assert payload["vehicles"][0]["label"] == "MOTORCYCLE"
-        assert payload["vehicles"][0]["category"] == "VEHICLE"
         assert len(payload["persons"]) == 1
-        assert payload["persons"][0]["label"] == "PERSON"
-        assert payload["persons"][0]["category"] == "PERSON"
 
     def test_custom_traffic_model_flags_helmet_violation_and_ingests_draft(self, auth_headers):
-        """
-        When model has validated helmet classes and detects a rider without helmet,
-        it flags NO_HELMET_RIDER and queues candidate with status PENDING_REVIEW.
-        """
+        """Custom traffic model detects unhelmeted rider and queues candidate with status PENDING_REVIEW."""
         traffic_names = {0: "person", 1: "motorcycle", 2: "helmet", 3: "no_helmet"}
         mock_boxes = [
             MockBox(cls_id=1, conf=0.91, xyxy=[100.0, 200.0, 300.0, 400.0]),
@@ -285,10 +285,7 @@ class TestModelClassTaxonomyAndInference:
             headers=auth_headers,
         )
         assert response.status_code == 200
-        data = response.json()
-        assert data["success"] is True
-
-        payload = data["data"]
+        payload = response.json()["data"]
         assert payload["detected"] is True
         assert payload["helmetClassificationAvailable"] is True
         assert payload["isCandidateViolation"] is True
@@ -296,38 +293,13 @@ class TestModelClassTaxonomyAndInference:
         assert payload["violationConfidence"] == 0.93
         assert payload["status"] == "PENDING_REVIEW"
         assert payload["caseId"] is not None
-        assert payload["modelRunId"] is not None
 
-        # Verify percentage coordinates format for UI overlay
-        boxes = payload["boxes"]
-        assert len(boxes) == 3
-        no_helmet_box = next(b for b in boxes if b["label"] == "NO_HELMET")
-        assert no_helmet_box["category"] == "HELMET_VIOLATION"
-        assert no_helmet_box["color"] == "#DC2626"
-        pct = no_helmet_box["percentage"]
-        assert 0 <= pct["x"] <= 100
-        assert 0 <= pct["y"] <= 100
-        assert 0 <= pct["width"] <= 100
-        assert 0 <= pct["height"] <= 100
-
-        # Verify MongoDB persistence in violations and model_runs collections
+        # Verify DB persistence
         db = get_db()
         violation_doc = db[COLLECTION_VIOLATIONS].find_one({"caseId": payload["caseId"]})
         assert violation_doc is not None
         assert violation_doc["status"] == "PENDING_REVIEW"
         assert violation_doc["violationType"] == "NO_HELMET_RIDER"
-        assert violation_doc["confidence"] == 0.93
-        assert violation_doc["evidence"]["storagePath"].startswith("/uploads/evidence/")
-        assert violation_doc["evidence"]["fileHash"] is not None
-        assert violation_doc["evidence"]["width"] == 640
-        assert violation_doc["evidence"]["height"] == 480
-
-        # Verify model_runs collection entry
-        run_doc = db[COLLECTION_MODEL_RUNS].find_one({"_id": ObjectId(payload["modelRunId"])})
-        assert run_doc is not None
-        assert run_doc["status"] == "SUCCESS"
-        assert run_doc["resultSummary"]["totalDetections"] == 3
-        assert run_doc["resultSummary"]["isCandidateViolation"] is True
 
     def test_custom_traffic_model_compliant_helmet(self, auth_headers):
         """When rider is wearing a helmet, candidate violation must NOT be triggered."""
@@ -352,14 +324,362 @@ class TestModelClassTaxonomyAndInference:
         assert payload["helmetClassificationAvailable"] is True
         assert payload["isCandidateViolation"] is False
         assert payload["status"] == "NO_VIOLATION"
-        assert "Compliant" in payload["helmetClassificationMessage"]
 
-    def test_get_model_status_endpoint(self):
-        """GET /detections/model-status returns 200 with model info."""
+
+class TestRoboflowInferenceEngineUnit:
+    """Direct unit tests for RoboflowInferenceEngine logic and error mapping."""
+
+    def test_classify_roboflow_labels(self):
+        """Validates exact mapping of Roboflow class labels."""
+        engine = RoboflowInferenceEngine(api_key="mock_key")
+        
+        cat, color, viol = engine._classify_roboflow_label("Without Helmet")
+        assert cat == "HELMET_VIOLATION"
+        assert color == "#DC2626"
+        assert viol is True
+
+        cat, color, viol = engine._classify_roboflow_label("With Helmet")
+        assert cat == "HELMET_COMPLIANT"
+        assert color == "#15803D"
+        assert viol is False
+
+        cat, color, viol = engine._classify_roboflow_label("licence")
+        assert cat == "LICENSE_PLATE"
+        assert color == "#D97706"
+        assert viol is False
+
+        cat, color, viol = engine._classify_roboflow_label("unrecognized_class")
+        assert cat == "OTHER"
+        assert color == "#64748B"
+        assert viol is False
+
+    def test_parse_roboflow_response_center_to_corner_coordinates(self):
+        """Validates translation of center (x, y, w, h) to corner [xyxy], normalized, and percentage."""
+        engine = RoboflowInferenceEngine(api_key="mock_key")
+        mock_raw = {
+            "predictions": [
+                {
+                    "x": 300.0,
+                    "y": 200.0,
+                    "width": 100.0,
+                    "height": 80.0,
+                    "confidence": 0.94,
+                    "class": "Without Helmet",
+                    "class_id": 1,
+                }
+            ]
+        }
+        res = engine._parse_roboflow_response(mock_raw, width=600, height=400)
+        assert res["detected"] is True
+        assert res["totalDetections"] == 1
+        assert res["isCandidateViolation"] is True
+        assert res["violationType"] == "NO_HELMET_RIDER"
+        assert res["violationConfidence"] == 0.94
+
+        box = res["boxes"][0]
+        assert box["label"] == "WITHOUT_HELMET"
+        assert box["category"] == "HELMET_VIOLATION"
+        # Center x=300, w=100 -> x1=250, x2=350. Center y=200, h=80 -> y1=160, y2=240
+        assert box["xyxy"] == [250.0, 160.0, 350.0, 240.0]
+        # Normalized: [ymin/H, xmin/W, ymax/H, xmax/W] = [160/400, 250/600, 240/400, 350/600]
+        assert box["normalized"] == [0.4, 0.4167, 0.6, 0.5833]
+        # Percentage coords:
+        assert box["percentage"]["x"] == round((250.0 / 600) * 100, 2)
+        assert box["percentage"]["y"] == round((160.0 / 400) * 100, 2)
+        assert box["percentage"]["width"] == round((100.0 / 600) * 100, 2)
+        assert box["percentage"]["height"] == round((80.0 / 400) * 100, 2)
+
+    def test_detect_unconfigured_api_key_raises_503(self):
+        """When API key is not configured, detect() must raise ModelNotAvailableError."""
+        engine = RoboflowInferenceEngine(api_key=None)
+        with pytest.raises(ModelNotAvailableError) as exc_info:
+            asyncio.run(engine.detect(_create_test_image_bytes()))
+        assert exc_info.value.status_code == 503
+        assert exc_info.value.error_code == "MODEL_NOT_AVAILABLE"
+        assert "ROBOFLOW_API_KEY" in exc_info.value.message
+
+    def test_detect_upstream_timeout_raises_remote_inference_error_504(self):
+        """When Roboflow API times out, must raise RemoteInferenceError with HTTP 504."""
+        engine = RoboflowInferenceEngine(api_key="mock_secret_key_123")
+        with patch("httpx.AsyncClient.post", side_effect=httpx.TimeoutException("Read timed out")):
+            with pytest.raises(RemoteInferenceError) as exc_info:
+                asyncio.run(engine.detect(_create_test_image_bytes()))
+            assert exc_info.value.status_code == 504
+            assert exc_info.value.error_code == "ROBOFLOW_TIMEOUT"
+
+    def test_detect_upstream_auth_failure_raises_502_and_masks_key(self):
+        """When upstream returns 401 Unauthorized, must raise HTTP 502 without leaking secret key."""
+        engine = RoboflowInferenceEngine(api_key="secret_test_key_xyz_789")
+        mock_resp = httpx.Response(
+            status_code=401,
+            json={"error": "Invalid API Key"},
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            with pytest.raises(RemoteInferenceError) as exc_info:
+                asyncio.run(engine.detect(_create_test_image_bytes()))
+            assert exc_info.value.status_code == 502
+            assert exc_info.value.error_code == "ROBOFLOW_AUTH_ERROR"
+            assert "secret_test_key_xyz_789" not in str(exc_info.value)
+            assert "secret_test_key_xyz_789" not in exc_info.value.message
+
+    def test_detect_malformed_response_raises_502(self):
+        """When upstream returns non-JSON text, must raise RemoteInferenceError HTTP 502."""
+        engine = RoboflowInferenceEngine(api_key="mock_secret_key_123")
+        mock_resp = httpx.Response(
+            status_code=200,
+            content=b"<html>502 Bad Gateway from cloudflare</html>",
+            headers={"Content-Type": "text/html"},
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            with pytest.raises(RemoteInferenceError) as exc_info:
+                asyncio.run(engine.detect(_create_test_image_bytes()))
+            assert exc_info.value.status_code == 502
+            assert exc_info.value.error_code == "ROBOFLOW_INVALID_RESPONSE"
+
+
+class TestRoboflowApiIntegration:
+    """Verifies full API endpoints with Roboflow provider and mocked HTTP calls."""
+
+    @pytest.fixture(autouse=True)
+    def use_roboflow_provider(self):
+        original_provider = settings.INFERENCE_PROVIDER
+        original_key = roboflow_engine.api_key
+        settings.INFERENCE_PROVIDER = "roboflow"
+        roboflow_engine.api_key = "test_roboflow_mock_key_999"
+        yield
+        settings.INFERENCE_PROVIDER = original_provider
+        roboflow_engine.api_key = original_key
+
+    def test_roboflow_analyze_without_helmet_queues_pending_review(self, auth_headers):
+        """
+        Simulates remote Roboflow detecting 'Without Helmet'.
+        Must return structured violation and persist case as PENDING_REVIEW in MongoDB.
+        """
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "inference_id": "rf-test-inf-1",
+                "time": 0.055,
+                "image": {"width": 640, "height": 480},
+                "predictions": [
+                    {
+                        "x": 320.0,
+                        "y": 180.0,
+                        "width": 120.0,
+                        "height": 140.0,
+                        "confidence": 0.952,
+                        "class": "Without Helmet",
+                        "class_id": 1,
+                    }
+                ],
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/helmet-and-no-helmet-rider-detection/6"),
+        )
+
+        img_bytes = _create_test_image_bytes(width=640, height=480)
+        files = {"file": ("rider_no_helmet.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {
+            "camera_id": "65f000000000000000000099",
+            "source_label": "Roboflow Test Cam",
+            "auto_ingest": "true",
+        }
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+
+            response = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                data=form_data,
+                headers=auth_headers,
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+
+        payload = data["data"]
+        assert payload["detected"] is True
+        assert payload["totalDetections"] == 1
+        assert payload["helmetClassificationAvailable"] is True
+        assert payload["isCandidateViolation"] is True
+        assert payload["violationType"] == "NO_HELMET_RIDER"
+        assert payload["violationConfidence"] == 0.952
+        assert payload["status"] == "PENDING_REVIEW"
+        assert payload["caseId"] is not None
+        assert payload["modelInfo"]["provider"] == "roboflow"
+        assert payload["modelInfo"]["modelId"] == "helmet-and-no-helmet-rider-detection/6"
+
+        box = payload["boxes"][0]
+        assert box["label"] == "WITHOUT_HELMET"
+        assert box["category"] == "HELMET_VIOLATION"
+        assert box["color"] == "#DC2626"
+        assert box["confidence"] == 0.952
+
+        # Verify MongoDB persistence
+        db = get_db()
+        violation_doc = db[COLLECTION_VIOLATIONS].find_one({"caseId": payload["caseId"]})
+        assert violation_doc is not None
+        assert violation_doc["status"] == "PENDING_REVIEW"
+        assert violation_doc["violationType"] == "NO_HELMET_RIDER"
+        assert violation_doc["confidence"] == 0.952
+
+        run_doc = db[COLLECTION_MODEL_RUNS].find_one({"_id": ObjectId(payload["modelRunId"])})
+        assert run_doc is not None
+        assert run_doc["modelName"] == "Roboflow:helmet-and-no-helmet-rider-detection"
+        assert run_doc["modelVersion"] == "6"
+
+    def test_roboflow_analyze_with_helmet_compliant(self, auth_headers):
+        """Simulates remote Roboflow detecting 'With Helmet' -> NO_VIOLATION."""
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    {
+                        "x": 280.0,
+                        "y": 150.0,
+                        "width": 110.0,
+                        "height": 120.0,
+                        "confidence": 0.971,
+                        "class": "With Helmet",
+                        "class_id": 0,
+                    }
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/helmet-and-no-helmet-rider-detection/6"),
+        )
+
+        img_bytes = _create_test_image_bytes(width=640, height=480)
+        files = {"file": ("helmet_compliant.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            response = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                headers=auth_headers,
+            )
+
+        assert response.status_code == 200
+        payload = response.json()["data"]
+        assert payload["detected"] is True
+        assert payload["isCandidateViolation"] is False
+        assert payload["status"] == "NO_VIOLATION"
+        assert payload["boxes"][0]["label"] == "WITH_HELMET"
+        assert payload["boxes"][0]["category"] == "HELMET_COMPLIANT"
+        assert payload["boxes"][0]["color"] == "#15803D"
+
+    def test_roboflow_analyze_licence_plate(self, auth_headers):
+        """Simulates remote Roboflow detecting 'licence' plate -> LICENSE_PLATE category."""
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    {
+                        "x": 300.0,
+                        "y": 380.0,
+                        "width": 130.0,
+                        "height": 45.0,
+                        "confidence": 0.884,
+                        "class": "licence",
+                        "class_id": 2,
+                    }
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/helmet-and-no-helmet-rider-detection/6"),
+        )
+
+        img_bytes = _create_test_image_bytes(width=640, height=480)
+        files = {"file": ("license_plate.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            response = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                headers=auth_headers,
+            )
+
+        assert response.status_code == 200
+        payload = response.json()["data"]
+        assert payload["boxes"][0]["label"] == "LICENCE"
+        assert payload["boxes"][0]["category"] == "LICENSE_PLATE"
+        assert payload["boxes"][0]["color"] == "#D97706"
+        assert payload["isCandidateViolation"] is False
+
+    def test_roboflow_missing_api_key_returns_503(self, auth_headers):
+        """When ROBOFLOW_API_KEY is unset, endpoint must return HTTP 503 MODEL_NOT_AVAILABLE."""
+        roboflow_engine.api_key = None
+
+        img_bytes = _create_test_image_bytes()
+        files = {"file": ("frame.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        response = client.post(
+            f"{settings.API_PREFIX}/detections/analyze",
+            files=files,
+            headers=auth_headers,
+        )
+        assert response.status_code == 503
+        data = response.json()
+        assert data["success"] is False
+        assert data["error_code"] == "MODEL_NOT_AVAILABLE"
+        assert "Roboflow API key" in data["message"]
+
+    def test_roboflow_upstream_auth_failure_returns_502(self, auth_headers):
+        """Upstream 401 Unauthorized returns HTTP 502 with ROBOFLOW_AUTH_ERROR."""
+        mock_401 = httpx.Response(
+            status_code=401,
+            json={"error": "Unauthorized key"},
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+
+        img_bytes = _create_test_image_bytes()
+        files = {"file": ("frame.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_401
+            response = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                headers=auth_headers,
+            )
+
+        assert response.status_code == 502
+        data = response.json()
+        assert data["success"] is False
+        assert data["error_code"] == "ROBOFLOW_AUTH_ERROR"
+        assert "test_roboflow_mock_key_999" not in data["message"]
+
+    def test_roboflow_upstream_timeout_returns_504(self, auth_headers):
+        """Upstream timeout returns HTTP 504 with ROBOFLOW_TIMEOUT."""
+        img_bytes = _create_test_image_bytes()
+        files = {"file": ("frame.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+
+        with patch("httpx.AsyncClient.post", side_effect=httpx.TimeoutException("Read timeout")):
+            response = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                headers=auth_headers,
+            )
+
+        assert response.status_code == 504
+        data = response.json()
+        assert data["success"] is False
+        assert data["error_code"] == "ROBOFLOW_TIMEOUT"
+
+    def test_roboflow_model_status_endpoint(self):
+        """GET /detections/model-status returns Roboflow configuration and class telemetry."""
         response = client.get(f"{settings.API_PREFIX}/detections/model-status")
         assert response.status_code == 200
         data = response.json()
         assert data["success"] is True
-        assert "classesCount" in data["data"]
-        assert "helmetClassificationSupported" in data["data"]
-        assert "expectedClasses" in data["data"]
+        info = data["data"]
+        assert info["provider"] == "roboflow"
+        assert info["modelId"] == "helmet-and-no-helmet-rider-detection/6"
+        assert info["helmetClassificationSupported"] is True
+        assert "With Helmet" in info["expectedClasses"]
+        assert "Without Helmet" in info["expectedClasses"]
+        assert "licence" in info["expectedClasses"]

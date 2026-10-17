@@ -253,8 +253,10 @@ export interface DetectionAnalysisResult {
     height: number;
   };
   modelInfo: {
+    provider?: string;
     isLoaded: boolean;
-    modelPath: string;
+    modelPath?: string;
+    modelId?: string;
     classesCount: number;
     helmetClassificationSupported: boolean;
     confidenceThreshold: number;

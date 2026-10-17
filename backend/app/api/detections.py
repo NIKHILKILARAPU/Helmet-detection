@@ -24,6 +24,7 @@ import cv2
 from fastapi import APIRouter, UploadFile, File, Form, Depends, status
 from fastapi.responses import JSONResponse
 
+from app.config import settings
 from app.schemas.common import ApiResponse
 from app.schemas.detections import (
     DetectionAnalysisResponse,
@@ -34,10 +35,12 @@ from app.schemas.violations import ViolationType, EvidenceModel
 from app.core.exceptions import (
     ValidationError,
     ModelNotAvailableError,
+    RemoteInferenceError,
     DatabaseUnavailableError,
 )
 from app.core.dependencies import require_authenticated_staff
 from app.models.yolo_inference import yolo_engine
+from app.models.roboflow_inference import roboflow_engine
 from app.db.connection import get_db
 from app.db.collections import (
     COLLECTION_MODEL_RUNS,
@@ -145,8 +148,19 @@ async def analyze_frame(
 
     height, width = image.shape[:2]
 
-    # 4. Execute real YOLO inference
-    det_result = yolo_engine.detect(image)
+    # 4. Execute AI inference via configured engine (Roboflow or local YOLO)
+    provider = (settings.INFERENCE_PROVIDER or "roboflow").lower()
+    if provider == "roboflow":
+        det_result = await roboflow_engine.detect(image)
+        model_name = f"Roboflow:{settings.ROBOFLOW_MODEL_ID.split('/')[0]}"
+        model_version = settings.ROBOFLOW_MODEL_ID.split('/')[-1] if '/' in settings.ROBOFLOW_MODEL_ID else "6"
+        active_model_info = roboflow_engine.get_model_info()
+    else:
+        det_result = yolo_engine.detect(image)
+        model_name = "YOLOv8n-Traffic"
+        model_version = "8.1.0"
+        active_model_info = yolo_engine.get_model_info()
+
     processing_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
 
     # 5. Persist evidence frame to disk (never store huge base64 in MongoDB)
@@ -175,8 +189,8 @@ async def analyze_frame(
         # Log to model_runs collection
         model_run_doc = {
             "cameraId": camera_oid,
-            "modelName": "YOLOv8n-Traffic",
-            "modelVersion": "8.1.0",
+            "modelName": model_name,
+            "modelVersion": model_version,
             "processedAt": now,
             "processingTimeMs": processing_time_ms,
             "resultSummary": {
@@ -319,7 +333,7 @@ async def analyze_frame(
         modelRunId=model_run_id,
         processingTimeMs=processing_time_ms,
         imageDimensions={"width": width, "height": height},
-        modelInfo=yolo_engine.get_model_info(),
+        modelInfo=active_model_info,
     )
 
     return ApiResponse(
@@ -336,16 +350,17 @@ async def analyze_frame(
     "/model-status",
     response_model=ApiResponse[Dict[str, Any]],
     status_code=status.HTTP_200_OK,
-    summary="Get current YOLO model loading status and supported classes",
+    summary="Get active AI model status and supported classes",
 )
 async def get_model_status():
     """
-    Returns live information about the active YOLO model weights,
-    path verification, and whether helmet violation classes are supported.
+    Returns live information about the active AI model (Roboflow or local YOLO),
+    configuration verification, and whether helmet violation classes are supported.
     """
-    info = yolo_engine.get_model_info()
+    provider = (settings.INFERENCE_PROVIDER or "roboflow").lower()
+    info = roboflow_engine.get_model_info() if provider == "roboflow" else yolo_engine.get_model_info()
     return ApiResponse(
         success=True,
         data=info,
-        message="YOLO model status retrieved.",
+        message=f"Active AI model status retrieved ({info.get('provider', 'local')}).",
     )

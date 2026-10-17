@@ -37,6 +37,7 @@ from app.api.operations import router as operations_router
 from app.api.audit import router as audit_router
 from app.api.detections import router as detections_router
 from app.models.yolo_inference import yolo_engine
+from app.models.roboflow_inference import roboflow_engine
 
 
 @asynccontextmanager
@@ -88,7 +89,12 @@ async def health_check():
         error=db_health_raw.get("error"),
     )
 
-    yolo_status = "READY" if yolo_engine.is_model_loaded() else "UNAVAILABLE"
+    provider = (settings.INFERENCE_PROVIDER or "roboflow").lower()
+    if provider == "roboflow":
+        model_ready = roboflow_engine.is_configured()
+    else:
+        model_ready = yolo_engine.is_model_loaded()
+    yolo_status = "READY" if model_ready else "UNAVAILABLE"
     overall_status = "ONLINE" if db_health.is_ready else "DEGRADED"
 
     msg = (
