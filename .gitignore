@@ -38,6 +38,14 @@ datasets/*
 !datasets/README.md
 !models/README.md
 
+# Backups and Uploads (keep raw media and backups out of git)
+backend/backups/
+backups/
+uploads/evidence/*
+!uploads/evidence/.gitkeep
+backend/uploads/evidence/*
+!backend/uploads/evidence/.gitkeep
+
 # Logs
 logs/
 *.log

@@ -1,6 +1,5 @@
-import type { ViolationCase, ViolationStatus, ViolationType, ReviewAuditLog } from '../types';
-import { INITIAL_CASES } from '../data/mockData';
-import { apiClient } from './api';
+import type { ViolationCase, ViolationStatus, ViolationType, ReviewAuditLog, BoundingBox } from '../types';
+import { apiClient, API_BASE_URL } from './api';
 
 export interface ViolationFilters {
   status?: ViolationStatus | 'ALL';
@@ -10,43 +9,110 @@ export interface ViolationFilters {
   dateTo?: string;
 }
 
+export function mapBackendViolationToCase(doc: any): ViolationCase {
+  const id = doc.caseId || doc.id || (doc._id ? String(doc._id) : 'UNKNOWN');
+  const capturedAt = doc.capturedAt 
+    ? new Date(doc.capturedAt).toISOString().replace('T', ' ').substring(0, 19) 
+    : new Date().toISOString().replace('T', ' ').substring(0, 19);
+
+  let evidenceImageUrl = doc.evidence?.imageUrl || doc.evidenceImageUrl || '';
+  if (evidenceImageUrl && evidenceImageUrl.startsWith('/')) {
+    const backendOrigin = API_BASE_URL.replace(/\/api\/v1\/?$/, '');
+    evidenceImageUrl = `${backendOrigin}${evidenceImageUrl}`;
+  }
+
+  const camera = typeof doc.camera === 'object' && doc.camera !== null ? {
+    id: doc.camera.id || String(doc.cameraId || 'CAM-01'),
+    name: doc.camera.name || doc.cameraName || 'Traffic Station',
+    location: doc.camera.location || doc.junction || 'Roadside Junction',
+    type: doc.camera.type || 'WEBCAM'
+  } : {
+    id: String(doc.cameraId || 'CAM-01'),
+    name: doc.cameraName || 'Traffic Station',
+    location: doc.junction || 'Roadside Junction',
+    type: 'WEBCAM' as const
+  };
+
+  const boundingBoxes: BoundingBox[] = Array.isArray(doc.boundingBoxes) ? doc.boundingBoxes.map((b: any, idx: number) => ({
+    id: b.id || `bb-${idx}`,
+    label: b.label || 'RIDER',
+    confidence: b.confidence ?? 0.9,
+    x: b.x ?? 0,
+    y: b.y ?? 0,
+    width: b.width ?? 0,
+    height: b.height ?? 0,
+    color: b.color || (b.label === 'Without Helmet' || b.label === 'NO_HELMET' ? '#DC2626' : '#15803D')
+  })) : [];
+
+  const reviewHistory: ReviewAuditLog[] = Array.isArray(doc.reviewHistory) && doc.reviewHistory.length > 0 
+    ? doc.reviewHistory 
+    : (doc.reviewedBy ? [{
+        id: `audit-${doc.reviewedAt || Date.now()}`,
+        timestamp: doc.reviewedAt ? new Date(doc.reviewedAt).toISOString().replace('T', ' ').substring(0, 19) : capturedAt,
+        actor: String(doc.reviewedBy),
+        role: 'reviewer',
+        action: (doc.status === 'REJECTED' ? 'CASE_REJECTED' : 'DRAFT_APPROVED') as any,
+        notes: doc.reviewerNotes
+      }] : []);
+
+  return {
+    id,
+    timestamp: capturedAt,
+    camera,
+    violationType: doc.violationType || 'NO_HELMET_RIDER',
+    confidence: doc.confidence ?? 0.9,
+    status: (doc.status as ViolationStatus) || 'PENDING_REVIEW',
+    evidenceImageUrl,
+    evidenceQuality: doc.evidenceQuality || 'HIGH',
+    boundingBoxes,
+    linkedPerson: doc.linkedPerson,
+    reviewerNotes: doc.reviewerNotes,
+    reviewHistory,
+    challanDraftNumber: doc.challanDraftNumber,
+    draftAmountInr: doc.draftAmountInr,
+    rejectionReason: doc.rejectionReason
+  };
+}
+
 class ViolationsService {
-  private localCases: ViolationCase[] = [...INITIAL_CASES];
-
-  async getCases(filters?: ViolationFilters): Promise<{ cases: ViolationCase[]; isDemo: boolean }> {
-    const res = await apiClient.get<ViolationCase[]>('/violations', this.localCases);
-    let cases = res.isDemoData ? [...this.localCases] : res.data;
-
-    if (filters) {
-      if (filters.status && filters.status !== 'ALL') {
-        cases = cases.filter(c => c.status === filters.status);
-      }
-      if (filters.violationType && filters.violationType !== 'ALL') {
-        cases = cases.filter(c => c.violationType === filters.violationType);
-      }
-      if (filters.searchQuery && filters.searchQuery.trim() !== '') {
-        const query = filters.searchQuery.toLowerCase().trim();
-        cases = cases.filter(c => 
-          c.id.toLowerCase().includes(query) ||
-          c.camera.name.toLowerCase().includes(query) ||
-          c.camera.location.toLowerCase().includes(query) ||
-          c.linkedPerson?.fullName.toLowerCase().includes(query) ||
-          c.linkedPerson?.vehiclePlate.toLowerCase().includes(query) ||
-          c.linkedPerson?.personId.toLowerCase().includes(query)
-        );
-      }
+  async getCases(filters?: ViolationFilters): Promise<{ cases: ViolationCase[]; isDemo: boolean; error?: string }> {
+    const params = new URLSearchParams();
+    if (filters?.status && filters.status !== 'ALL') {
+      params.append('status', filters.status);
     }
+    if (filters?.violationType && filters.violationType !== 'ALL') {
+      params.append('type', filters.violationType);
+    }
+    if (filters?.searchQuery && filters.searchQuery.trim()) {
+      params.append('search', filters.searchQuery.trim());
+    }
+
+    const queryStr = params.toString() ? `?${params.toString()}` : '';
+    const res = await apiClient.get<any[]>(`/violations${queryStr}`);
+
+    if (!res.success || !res.data) {
+      return {
+        cases: [],
+        isDemo: false,
+        error: res.error || 'Failed to retrieve violations from database.'
+      };
+    }
+
+    const rawList = Array.isArray(res.data) ? res.data : [];
+    const cases = rawList.map(mapBackendViolationToCase);
 
     return {
       cases,
-      isDemo: res.isDemoData
+      isDemo: false
     };
   }
 
   async getCaseById(caseId: string): Promise<ViolationCase | null> {
-    const found = this.localCases.find(c => c.id === caseId);
-    if (!found) return null;
-    return found;
+    const res = await apiClient.get<any>(`/violations/${encodeURIComponent(caseId)}`);
+    if (!res.success || !res.data) {
+      return null;
+    }
+    return mapBackendViolationToCase(res.data);
   }
 
   async approveDraft(
@@ -54,44 +120,19 @@ class ViolationsService {
     reviewerName: string, 
     notes?: string
   ): Promise<{ success: boolean; updatedCase: ViolationCase; isDemo: boolean }> {
-    const existingIndex = this.localCases.findIndex(c => c.id === caseId);
-    if (existingIndex === -1) {
-      throw new Error(`Case ${caseId} not found`);
-    }
-
-    const current = this.localCases[existingIndex];
-    const draftNumber = current.challanDraftNumber || `DFT-2026-${Math.floor(10000 + Math.random() * 90000)}`;
-
-    const newAudit: ReviewAuditLog = {
-      id: `audit-${Date.now()}`,
-      timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
-      actor: reviewerName,
-      role: 'reviewer',
-      action: 'DRAFT_APPROVED',
-      notes: notes || 'Draft created for formal notice review under Section 129 Motor Vehicles Act.'
-    };
-
-    const updated: ViolationCase = {
-      ...current,
-      status: 'DRAFT_CREATED',
-      challanDraftNumber: draftNumber,
-      draftAmountInr: current.draftAmountInr || 1000,
-      reviewerNotes: notes || current.reviewerNotes,
-      reviewHistory: [newAudit, ...current.reviewHistory]
-    };
-
-    this.localCases[existingIndex] = updated;
-
-    const res = await apiClient.post<ViolationCase>(`/violations/${caseId}/approve-draft`, {
+    const res = await apiClient.post<any>(`/violations/${encodeURIComponent(caseId)}/approve-draft`, {
       reviewerName,
-      notes,
-      challanDraftNumber: draftNumber
-    }, updated);
+      notes: notes || undefined
+    });
+
+    if (!res.success || !res.data) {
+      throw new Error(res.error || `Failed to approve draft for case ${caseId}`);
+    }
 
     return {
       success: true,
-      updatedCase: res.data,
-      isDemo: res.isDemoData
+      updatedCase: mapBackendViolationToCase(res.data),
+      isDemo: false
     };
   }
 
@@ -101,48 +142,41 @@ class ViolationsService {
     reason: string,
     notes?: string
   ): Promise<{ success: boolean; updatedCase: ViolationCase; isDemo: boolean }> {
-    const existingIndex = this.localCases.findIndex(c => c.id === caseId);
-    if (existingIndex === -1) {
-      throw new Error(`Case ${caseId} not found`);
-    }
-
-    const current = this.localCases[existingIndex];
-    const newAudit: ReviewAuditLog = {
-      id: `audit-${Date.now()}`,
-      timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
-      actor: reviewerName,
-      role: 'reviewer',
-      action: 'CASE_REJECTED',
-      reason,
-      notes: notes || `Case rejected: ${reason}`
-    };
-
-    const updated: ViolationCase = {
-      ...current,
-      status: 'REJECTED',
-      rejectionReason: reason,
-      reviewerNotes: notes || current.reviewerNotes,
-      reviewHistory: [newAudit, ...current.reviewHistory]
-    };
-
-    this.localCases[existingIndex] = updated;
-
-    const res = await apiClient.post<ViolationCase>(`/violations/${caseId}/reject`, {
+    const res = await apiClient.post<any>(`/violations/${encodeURIComponent(caseId)}/reject`, {
       reviewerName,
       reason,
-      notes
-    }, updated);
+      notes: notes || undefined
+    });
+
+    if (!res.success || !res.data) {
+      throw new Error(res.error || `Failed to reject case ${caseId}`);
+    }
 
     return {
       success: true,
-      updatedCase: res.data,
-      isDemo: res.isDemoData
+      updatedCase: mapBackendViolationToCase(res.data),
+      isDemo: false
     };
   }
 
   async addCapturedCase(newCase: ViolationCase): Promise<ViolationCase> {
-    this.localCases.unshift(newCase);
-    await apiClient.post<ViolationCase>('/violations', newCase, newCase);
+    const res = await apiClient.post<any>('/violations', {
+      cameraId: newCase.camera.id,
+      violationType: newCase.violationType,
+      confidence: newCase.confidence,
+      status: newCase.status,
+      evidence: {
+        imageUrl: newCase.evidenceImageUrl,
+        thumbnailUrl: newCase.evidenceImageUrl,
+        mimeType: 'image/jpeg'
+      },
+      evidenceQuality: newCase.evidenceQuality,
+      boundingBoxes: newCase.boundingBoxes
+    });
+
+    if (res.success && res.data) {
+      return mapBackendViolationToCase(res.data);
+    }
     return newCase;
   }
 }

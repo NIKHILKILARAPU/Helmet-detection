@@ -28,12 +28,17 @@ export const Header: React.FC<HeaderProps> = ({
     currentRole, 
     setCurrentRole, 
     currentUser, 
+    cases,
+    cameraSources,
     systemHealth,
     addToast
   } = useApp();
 
   const [showRoleMenu, setShowRoleMenu] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
+
+  const pendingCount = cases.filter(c => c.status === 'PENDING_REVIEW').length;
+  const onlineCamerasCount = cameraSources.filter(c => c.status === 'ONLINE').length;
 
   const rolesList: { id: UserRole; label: string; icon: React.ReactNode; desc: string }[] = [
     {
@@ -77,20 +82,20 @@ export const Header: React.FC<HeaderProps> = ({
       {/* Demo Warning Banner */}
       <div className="bg-[#17324D] text-slate-100 px-4 py-1.5 text-xs flex flex-wrap items-center justify-between border-b border-slate-700">
         <div className="flex items-center gap-2">
-          <span className="inline-flex items-center gap-1 font-semibold text-amber-400 bg-amber-950/60 px-2 py-0.5 rounded text-[11px] border border-amber-800">
-            <Sparkles className="w-3 h-3 text-amber-400" />
-            DEVELOPMENT DEMO MODE
+          <span className="inline-flex items-center gap-1 font-semibold text-emerald-400 bg-emerald-950/60 px-2 py-0.5 rounded text-[11px] border border-emerald-800">
+            <Sparkles className="w-3 h-3 text-emerald-400" />
+            LIVE ENFORCEMENT SYSTEM
           </span>
           <span className="text-slate-300 hidden sm:inline">
-            FastAPI/MongoDB integration ready • Frontend role switcher active
+            FastAPI backend active • Database: helmet_challan_db
           </span>
         </div>
 
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1.5 text-[11px]">
-            <span className={`w-2 h-2 rounded-full ${systemHealth.isBackendConnected ? 'bg-emerald-400' : 'bg-amber-400'}`} />
+            <span className={`w-2 h-2 rounded-full ${systemHealth.isBackendConnected ? 'bg-emerald-400' : 'bg-red-400'}`} />
             <span className="text-slate-300">
-              {systemHealth.isBackendConnected ? 'FastAPI Connected' : 'Demo State (In-Memory)'}
+              {systemHealth.isBackendConnected ? 'FastAPI Connected' : 'Backend Disconnected'}
             </span>
           </div>
 
@@ -184,24 +189,39 @@ export const Header: React.FC<HeaderProps> = ({
               aria-label="View notifications"
             >
               <Bell className="w-5 h-5" />
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-amber-500"></span>
+              {pendingCount > 0 && (
+                <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-amber-500"></span>
+              )}
             </button>
 
             {showNotifications && (
               <div className="absolute right-0 mt-2 w-72 rounded-xl bg-white shadow-xl border border-slate-200 p-3 z-50">
                 <div className="flex items-center justify-between pb-2 border-b border-slate-100">
                   <span className="text-xs font-bold text-slate-800">System Notifications</span>
-                  <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-medium">Demo</span>
+                  <span className="text-[10px] bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded font-medium">Live</span>
                 </div>
                 <div className="py-2 space-y-2 text-xs">
-                  <div className="p-2 rounded-lg bg-amber-50 border border-amber-100 text-amber-900">
-                    <span className="font-semibold block text-[11px]">Pending Review Queue</span>
-                    <span className="text-[11px] text-amber-800">14 candidate frames waiting for human verification.</span>
-                  </div>
-                  <div className="p-2 rounded-lg bg-slate-50 border border-slate-100 text-slate-700">
-                    <span className="font-semibold block text-[11px]">Camera CAM-04 Live</span>
-                    <span className="text-[11px] text-slate-600">Koramangala 80ft Road stream active at 30 FPS.</span>
-                  </div>
+                  {pendingCount > 0 && (
+                    <div className="p-2 rounded-lg bg-amber-50 border border-amber-100 text-amber-900">
+                      <span className="font-semibold block text-[11px]">Pending Review Queue</span>
+                      <span className="text-[11px] text-amber-800">
+                        {pendingCount} candidate frame{pendingCount > 1 ? 's' : ''} waiting for human verification.
+                      </span>
+                    </div>
+                  )}
+                  {onlineCamerasCount > 0 && (
+                    <div className="p-2 rounded-lg bg-emerald-50 border border-emerald-100 text-emerald-900">
+                      <span className="font-semibold block text-[11px]">Active Camera Network</span>
+                      <span className="text-[11px] text-emerald-800">
+                        {onlineCamerasCount} camera feed{onlineCamerasCount > 1 ? 's' : ''} active and monitoring.
+                      </span>
+                    </div>
+                  )}
+                  {pendingCount === 0 && onlineCamerasCount === 0 && (
+                    <div className="p-3 text-center text-slate-500 text-xs">
+                      No unread alerts or notifications.
+                    </div>
+                  )}
                 </div>
               </div>
             )}

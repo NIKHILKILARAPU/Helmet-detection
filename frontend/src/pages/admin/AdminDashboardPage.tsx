@@ -24,8 +24,9 @@ import { StatusBadge } from '../../components/common/StatusBadge';
 import { HourlyDistributionChart, MonthlyTrendChart } from '../../components/common/SimpleChart';
 import { Modal } from '../../components/common/Modal';
 import { EvidenceViewer } from '../../components/common/EvidenceViewer';
-import type { ViolationCase, RegisteredPerson, CameraSourceRecord } from '../../types';
-import { INITIAL_DASHBOARD_STATS } from '../../data/mockData';
+import { EmptyState } from '../../components/common/EmptyState';
+import type { ViolationCase, RegisteredPerson, CameraSourceRecord, DashboardStats } from '../../types';
+import { statsService, EMPTY_DASHBOARD_STATS } from '../../services/statsService';
 
 export const AdminDashboardPage: React.FC = () => {
   const { 
@@ -38,6 +39,7 @@ export const AdminDashboardPage: React.FC = () => {
     updateSystemSettings,
     systemHealth, 
     refreshHealth, 
+    refreshAllData,
     activeNavTab,
     setActiveNavTab
   } = useApp();
@@ -48,6 +50,7 @@ export const AdminDashboardPage: React.FC = () => {
   const [selectedCaseForModal, setSelectedCaseForModal] = useState<ViolationCase | null>(null);
   const [selectedPersonForModal, setSelectedPersonForModal] = useState<RegisteredPerson | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [dashboardStats, setDashboardStats] = useState<DashboardStats>(EMPTY_DASHBOARD_STATS);
 
   // Local settings state
   const [localSettings, setLocalSettings] = useState(systemSettings);
@@ -56,6 +59,22 @@ export const AdminDashboardPage: React.FC = () => {
   const [newCamJunction, setNewCamJunction] = useState('');
   const [newCamType, setNewCamType] = useState<'IP_CAMERA' | 'CCTV_STREAM'>('IP_CAMERA');
   const [newCamUrl, setNewCamUrl] = useState('');
+
+  const loadStats = React.useCallback(async () => {
+    const res = await statsService.getDashboardStats();
+    if (res.success) {
+      setDashboardStats(res.stats);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    loadStats();
+  }, [loadStats]);
+
+  // Keep localSettings in sync with systemSettings from context
+  React.useEffect(() => {
+    setLocalSettings(systemSettings);
+  }, [systemSettings]);
 
   // Filtered cases for table
   const filteredCases = useMemo(() => {
@@ -79,8 +98,8 @@ export const AdminDashboardPage: React.FC = () => {
 
   const handleManualRefresh = async () => {
     setIsRefreshing(true);
-    await refreshHealth();
-    setTimeout(() => setIsRefreshing(false), 500);
+    await Promise.all([refreshHealth(), refreshAllData(), loadStats()]);
+    setIsRefreshing(false);
   };
 
   return (
@@ -160,7 +179,9 @@ export const AdminDashboardPage: React.FC = () => {
             <div className="text-xs text-slate-500 flex items-center gap-2">
               <span>Jurisdiction: <strong>Bengaluru City Traffic Police (BCTP)</strong></span>
               <span className="text-slate-300">•</span>
-              <span className="text-emerald-700 font-medium">4 Active Camera Feeds</span>
+              <span className="text-emerald-700 font-medium">
+                {cameraSources.filter(c => c.status === 'ONLINE').length} Active Camera Feeds
+              </span>
             </div>
           </div>
 
@@ -168,11 +189,11 @@ export const AdminDashboardPage: React.FC = () => {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <StatCard
               label="Total Scanned Today"
-              value={INITIAL_DASHBOARD_STATS.todayTotalDetections}
+              value={dashboardStats.todayTotalDetections}
               icon={<Camera className="w-4 h-4" />}
-              subtext="Across 4 surveillance junction cameras"
+              subtext={cameraSources.length > 0 ? `Across ${cameraSources.length} surveillance cameras` : "No surveillance cameras active"}
               accentColor="#2563EB"
-              isDemo={true}
+              isDemo={false}
             />
             <StatCard
               label="Pending Review"
@@ -180,35 +201,35 @@ export const AdminDashboardPage: React.FC = () => {
               icon={<AlertTriangle className="w-4 h-4" />}
               subtext="Awaiting human officer verification"
               accentColor="#F59E0B"
-              isDemo={true}
+              isDemo={false}
             />
             <StatCard
               label="Approved Challan Drafts"
-              value={draftCount + INITIAL_DASHBOARD_STATS.todayApprovedDrafts}
+              value={draftCount}
               icon={<CheckCircle2 className="w-4 h-4" />}
               subtext="Drafts generated (no fine triggered yet)"
               accentColor="#15803D"
-              isDemo={true}
+              isDemo={false}
             />
             <StatCard
               label="Rejected / False Alerts"
-              value={rejectedCount + INITIAL_DASHBOARD_STATS.todayRejectedCases}
+              value={rejectedCount}
               icon={<XCircle className="w-4 h-4" />}
               subtext="Occlusions, false shadows, safe riders"
               accentColor="#DC2626"
-              isDemo={true}
+              isDemo={false}
             />
           </div>
 
           {/* Charts Row */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <HourlyDistributionChart 
-              data={INITIAL_DASHBOARD_STATS.hourlyTrends}
-              isDemo={true}
+              data={dashboardStats.hourlyTrends}
+              isDemo={false}
             />
             <MonthlyTrendChart 
-              data={INITIAL_DASHBOARD_STATS.monthlyTrends}
-              isDemo={true}
+              data={dashboardStats.monthlyTrends}
+              isDemo={false}
             />
           </div>
 
@@ -229,68 +250,77 @@ export const AdminDashboardPage: React.FC = () => {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs text-slate-700">
-                <thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500 border-b border-slate-200">
-                  <tr>
-                    <th className="py-3 px-4">Case ID</th>
-                    <th className="py-3 px-4">Timestamp</th>
-                    <th className="py-3 px-4">Camera / Location</th>
-                    <th className="py-3 px-4">Violation Type</th>
-                    <th className="py-3 px-4">Registered Owner</th>
-                    <th className="py-3 px-4">Status</th>
-                    <th className="py-3 px-4 text-right">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {cases.slice(0, 4).map(c => (
-                    <tr key={c.id} className="hover:bg-slate-50/80 transition-colors">
-                      <td className="py-3 px-4 font-mono font-semibold text-slate-900">
-                        {c.id}
-                      </td>
-                      <td className="py-3 px-4 text-slate-500 whitespace-nowrap">
-                        {c.timestamp.split(' ')[1]}
-                      </td>
-                      <td className="py-3 px-4">
-                        <div className="font-medium text-slate-800">{c.camera.name}</div>
-                        <div className="text-[11px] text-slate-400">{c.camera.location}</div>
-                      </td>
-                      <td className="py-3 px-4">
-                        <span className="font-medium text-slate-800">
-                          {c.violationType.replace(/_/g, ' ')}
-                        </span>
-                        <span className="ml-1 text-[11px] text-slate-400">
-                          ({(c.confidence * 100).toFixed(0)}%)
-                        </span>
-                      </td>
-                      <td className="py-3 px-4">
-                        {c.linkedPerson ? (
-                          <div>
-                            <span className="font-medium text-slate-800">{c.linkedPerson.fullName}</span>
-                            <span className="block text-[11px] text-slate-400 font-mono">
-                              {c.linkedPerson.vehiclePlate}
-                            </span>
-                          </div>
-                        ) : (
-                          <span className="text-slate-400 italic">Unmatched Candidate</span>
-                        )}
-                      </td>
-                      <td className="py-3 px-4">
-                        <StatusBadge status={c.status} size="sm" />
-                      </td>
-                      <td className="py-3 px-4 text-right">
-                        <button
-                          type="button"
-                          onClick={() => setSelectedCaseForModal(c)}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-md hover:bg-slate-50"
-                        >
-                          <Eye className="w-3.5 h-3.5 text-slate-500" />
-                          <span>Inspect</span>
-                        </button>
-                      </td>
+              {cases.length === 0 ? (
+                <div className="p-8 text-center">
+                  <EmptyState
+                    title="No Candidate Violations"
+                    description="No violations are currently recorded in the database. Ingested live webcam frames or camera detections will appear here."
+                  />
+                </div>
+              ) : (
+                <table className="w-full text-left text-xs text-slate-700">
+                  <thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500 border-b border-slate-200">
+                    <tr>
+                      <th className="py-3 px-4">Case ID</th>
+                      <th className="py-3 px-4">Timestamp</th>
+                      <th className="py-3 px-4">Camera / Location</th>
+                      <th className="py-3 px-4">Violation Type</th>
+                      <th className="py-3 px-4">Registered Owner</th>
+                      <th className="py-3 px-4">Status</th>
+                      <th className="py-3 px-4 text-right">Action</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {cases.slice(0, 4).map(c => (
+                      <tr key={c.id} className="hover:bg-slate-50/80 transition-colors">
+                        <td className="py-3 px-4 font-mono font-semibold text-slate-900">
+                          {c.id}
+                        </td>
+                        <td className="py-3 px-4 text-slate-500 whitespace-nowrap">
+                          {c.timestamp.includes(' ') ? c.timestamp.split(' ')[1] : c.timestamp}
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className="font-medium text-slate-800">{c.camera.name}</div>
+                          <div className="text-[11px] text-slate-400">{c.camera.location}</div>
+                        </td>
+                        <td className="py-3 px-4">
+                          <span className="font-medium text-slate-800">
+                            {c.violationType.replace(/_/g, ' ')}
+                          </span>
+                          <span className="ml-1 text-[11px] text-slate-400">
+                            ({(c.confidence * 100).toFixed(0)}%)
+                          </span>
+                        </td>
+                        <td className="py-3 px-4">
+                          {c.linkedPerson ? (
+                            <div>
+                              <span className="font-medium text-slate-800">{c.linkedPerson.fullName}</span>
+                              <span className="block text-[11px] text-slate-400 font-mono">
+                                {c.linkedPerson.vehiclePlate}
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-slate-400 italic">Unmatched Candidate</span>
+                          )}
+                        </td>
+                        <td className="py-3 px-4">
+                          <StatusBadge status={c.status} size="sm" />
+                        </td>
+                        <td className="py-3 px-4 text-right">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedCaseForModal(c)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-md hover:bg-slate-50"
+                          >
+                            <Eye className="w-3.5 h-3.5 text-slate-500" />
+                            <span>Inspect</span>
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
           </div>
         </div>
@@ -332,75 +362,84 @@ export const AdminDashboardPage: React.FC = () => {
           </div>
 
           {/* Table */}
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs text-slate-700">
-              <thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500 border-b border-slate-200">
-                <tr>
-                  <th className="py-3 px-4">Case ID</th>
-                  <th className="py-3 px-4">Timestamp</th>
-                  <th className="py-3 px-4">Camera Feed</th>
-                  <th className="py-3 px-4">Violation Predicted</th>
-                  <th className="py-3 px-4">Confidence</th>
-                  <th className="py-3 px-4">Registered Owner</th>
-                  <th className="py-3 px-4">Masked Mobile</th>
-                  <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-4 text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {filteredCases.map(c => (
-                  <tr key={c.id} className="hover:bg-slate-50/80 transition-colors">
-                    <td className="py-3.5 px-4 font-mono font-semibold text-slate-900">
-                      {c.id}
-                    </td>
-                    <td className="py-3.5 px-4 text-slate-600 whitespace-nowrap">
-                      {c.timestamp}
-                    </td>
-                    <td className="py-3.5 px-4">
-                      <div className="font-medium text-slate-800">{c.camera.name}</div>
-                      <div className="text-[11px] text-slate-400">{c.camera.location}</div>
-                    </td>
-                    <td className="py-3.5 px-4">
-                      <span className="font-semibold text-slate-800">
-                        {c.violationType.replace(/_/g, ' ')}
-                      </span>
-                    </td>
-                    <td className="py-3.5 px-4">
-                      <span className={`font-semibold ${c.confidence >= 0.9 ? 'text-emerald-700' : 'text-amber-700'}`}>
-                        {(c.confidence * 100).toFixed(1)}%
-                      </span>
-                    </td>
-                    <td className="py-3.5 px-4">
-                      {c.linkedPerson ? (
-                        <div>
-                          <div className="font-medium text-slate-900">{c.linkedPerson.fullName}</div>
-                          <div className="text-[11px] font-mono text-slate-500">{c.linkedPerson.vehiclePlate}</div>
-                        </div>
-                      ) : (
-                        <span className="text-slate-400 italic">Unmatched</span>
-                      )}
-                    </td>
-                    <td className="py-3.5 px-4 font-mono text-slate-600">
-                      {c.linkedPerson?.maskedMobile || '—'}
-                    </td>
-                    <td className="py-3.5 px-4">
-                      <StatusBadge status={c.status} size="sm" />
-                    </td>
-                    <td className="py-3.5 px-4 text-right">
-                      <button
-                        type="button"
-                        onClick={() => setSelectedCaseForModal(c)}
-                        className="inline-flex items-center gap-1 px-3 py-1 text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100"
-                      >
-                        <Eye className="w-3.5 h-3.5 text-blue-600" />
-                        <span>Inspect</span>
-                      </button>
-                    </td>
+          {filteredCases.length === 0 ? (
+            <div className="p-8 text-center bg-white rounded-xl border border-slate-200">
+              <EmptyState
+                title="No Violations Found"
+                description={cases.length === 0 ? "Database has no violation candidate records. Processed live frames will appear here." : "No records match your selected filter criteria."}
+              />
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs text-slate-700">
+                <thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500 border-b border-slate-200">
+                  <tr>
+                    <th className="py-3 px-4">Case ID</th>
+                    <th className="py-3 px-4">Timestamp</th>
+                    <th className="py-3 px-4">Camera Feed</th>
+                    <th className="py-3 px-4">Violation Predicted</th>
+                    <th className="py-3 px-4">Confidence</th>
+                    <th className="py-3 px-4">Registered Owner</th>
+                    <th className="py-3 px-4">Masked Mobile</th>
+                    <th className="py-3 px-4">Status</th>
+                    <th className="py-3 px-4 text-right">Action</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredCases.map(c => (
+                    <tr key={c.id} className="hover:bg-slate-50/80 transition-colors">
+                      <td className="py-3.5 px-4 font-mono font-semibold text-slate-900">
+                        {c.id}
+                      </td>
+                      <td className="py-3.5 px-4 text-slate-600 whitespace-nowrap">
+                        {c.timestamp}
+                      </td>
+                      <td className="py-3.5 px-4">
+                        <div className="font-medium text-slate-800">{c.camera.name}</div>
+                        <div className="text-[11px] text-slate-400">{c.camera.location}</div>
+                      </td>
+                      <td className="py-3.5 px-4">
+                        <span className="font-semibold text-slate-800">
+                          {c.violationType.replace(/_/g, ' ')}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-4">
+                        <span className={`font-semibold ${c.confidence >= 0.9 ? 'text-emerald-700' : 'text-amber-700'}`}>
+                          {(c.confidence * 100).toFixed(1)}%
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-4">
+                        {c.linkedPerson ? (
+                          <div>
+                            <div className="font-medium text-slate-900">{c.linkedPerson.fullName}</div>
+                            <div className="text-[11px] font-mono text-slate-500">{c.linkedPerson.vehiclePlate}</div>
+                          </div>
+                        ) : (
+                          <span className="text-slate-400 italic">Unmatched</span>
+                        )}
+                      </td>
+                      <td className="py-3.5 px-4 font-mono text-slate-600">
+                        {c.linkedPerson?.maskedMobile || '—'}
+                      </td>
+                      <td className="py-3.5 px-4">
+                        <StatusBadge status={c.status} size="sm" />
+                      </td>
+                      <td className="py-3.5 px-4 text-right">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedCaseForModal(c)}
+                          className="inline-flex items-center gap-1 px-3 py-1 text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100"
+                        >
+                          <Eye className="w-3.5 h-3.5 text-blue-600" />
+                          <span>Inspect</span>
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 
@@ -415,70 +454,79 @@ export const AdminDashboardPage: React.FC = () => {
               </p>
             </div>
             <div className="text-xs text-slate-500">
-              Total pre-registered demo records: <strong>{persons.length}</strong>
+              Total registered citizen records: <strong>{persons.length}</strong>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {persons.map(person => (
-              <div 
-                key={person.personId} 
-                className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs hover:border-slate-300 transition-all flex flex-col justify-between"
-              >
-                <div>
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <h4 className="text-sm font-bold text-slate-900">{person.fullName}</h4>
-                      <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
-                        <span className="font-mono">{person.personId}</span>
-                        <span>•</span>
-                        <span>{person.city}</span>
+          {persons.length === 0 ? (
+            <div className="p-8 text-center bg-white rounded-xl border border-slate-200">
+              <EmptyState
+                title="No Registered Citizens in Database"
+                description="State Transport registry is currently empty in the database."
+              />
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {persons.map(person => (
+                <div 
+                  key={person.personId} 
+                  className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs hover:border-slate-300 transition-all flex flex-col justify-between"
+                >
+                  <div>
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <h4 className="text-sm font-bold text-slate-900">{person.fullName}</h4>
+                        <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
+                          <span className="font-mono">{person.personId}</span>
+                          <span>•</span>
+                          <span>{person.city}</span>
+                        </div>
+                      </div>
+                      <StatusBadge status={person.identityStatus} size="sm" />
+                    </div>
+
+                    <div className="mt-4 pt-3 border-t border-slate-100 grid grid-cols-2 gap-3 text-xs">
+                      <div>
+                        <span className="text-slate-400 block text-[11px]">Masked Mobile:</span>
+                        <span className="font-mono font-medium text-slate-800">{person.maskedMobile}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-400 block text-[11px]">Linked Cases:</span>
+                        <span className="font-semibold text-slate-800">{person.linkedCasesCount} cases</span>
                       </div>
                     </div>
-                    <StatusBadge status={person.identityStatus} size="sm" />
+
+                    <div className="mt-3">
+                      <span className="text-slate-400 block text-[11px] mb-1">Registered Vehicles:</span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {person.linkedVehicles.map(v => (
+                          <span 
+                            key={v.plateNumber} 
+                            className="px-2 py-0.5 rounded bg-slate-100 font-mono text-[11px] text-slate-800 font-semibold border border-slate-200"
+                          >
+                            {v.plateNumber} ({v.model.split('-')[0].trim()})
+                          </span>
+                        ))}
+                      </div>
+                    </div>
                   </div>
 
-                  <div className="mt-4 pt-3 border-t border-slate-100 grid grid-cols-2 gap-3 text-xs">
-                    <div>
-                      <span className="text-slate-400 block text-[11px]">Masked Mobile:</span>
-                      <span className="font-mono font-medium text-slate-800">{person.maskedMobile}</span>
-                    </div>
-                    <div>
-                      <span className="text-slate-400 block text-[11px]">Linked Cases:</span>
-                      <span className="font-semibold text-slate-800">{person.linkedCasesCount} cases</span>
-                    </div>
-                  </div>
-
-                  <div className="mt-3">
-                    <span className="text-slate-400 block text-[11px] mb-1">Registered Vehicles:</span>
-                    <div className="flex flex-wrap gap-1.5">
-                      {person.linkedVehicles.map(v => (
-                        <span 
-                          key={v.plateNumber} 
-                          className="px-2 py-0.5 rounded bg-slate-100 font-mono text-[11px] text-slate-800 font-semibold border border-slate-200"
-                        >
-                          {v.plateNumber} ({v.model.split('-')[0].trim()})
-                        </span>
-                      ))}
-                    </div>
+                  <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between">
+                    <span className="text-[11px] text-slate-400">
+                      Notifications: {person.notificationHistory.length} notices logged
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedPersonForModal(person)}
+                      className="text-xs font-semibold text-blue-600 hover:text-blue-800"
+                    >
+                      View Full Profile &rarr;
+                    </button>
                   </div>
                 </div>
-
-                <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between">
-                  <span className="text-[11px] text-slate-400">
-                    Notifications: {person.notificationHistory.length} notices logged
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedPersonForModal(person)}
-                    className="text-xs font-semibold text-blue-600 hover:text-blue-800"
-                  >
-                    View Full Profile &rarr;
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -492,52 +540,61 @@ export const AdminDashboardPage: React.FC = () => {
             </div>
             <button
               type="button"
-              onClick={() => alert('Role creation is disabled in demo mode.')}
+              onClick={() => alert('Contact System Administrator to provision additional official staff credentials.')}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 shadow-xs"
             >
               <UserPlus className="w-3.5 h-3.5" />
-              <span>Add Staff User (Demo)</span>
+              <span>Add Staff User</span>
             </button>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs text-slate-700">
-              <thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500 border-b border-slate-200">
-                <tr>
-                  <th className="py-3 px-4">User ID</th>
-                  <th className="py-3 px-4">Staff Name</th>
-                  <th className="py-3 px-4">Department / Unit</th>
-                  <th className="py-3 px-4">Assigned Role</th>
-                  <th className="py-3 px-4">Account Status</th>
-                  <th className="py-3 px-4">Last Activity</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {userAccounts.map(u => (
-                  <tr key={u.id} className="hover:bg-slate-50/80">
-                    <td className="py-3.5 px-4 font-mono font-semibold text-slate-900">{u.id}</td>
-                    <td className="py-3.5 px-4">
-                      <div className="font-semibold text-slate-900">{u.name}</div>
-                      <div className="text-[11px] text-slate-400">{u.email}</div>
-                    </td>
-                    <td className="py-3.5 px-4 text-slate-600">{u.department}</td>
-                    <td className="py-3.5 px-4">
-                      <span className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold capitalize bg-slate-100 text-slate-800 border border-slate-200">
-                        {u.role}
-                      </span>
-                    </td>
-                    <td className="py-3.5 px-4">
-                      <span className="inline-flex items-center gap-1 text-emerald-700 font-semibold text-[11px]">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                        {u.status}
-                      </span>
-                    </td>
-                    <td className="py-3.5 px-4 text-slate-500 whitespace-nowrap">{u.lastLogin}</td>
+          {userAccounts.length === 0 ? (
+            <div className="p-8 text-center">
+              <EmptyState
+                title="No Staff Accounts Found"
+                description="No registered staff accounts are stored in the database."
+              />
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs text-slate-700">
+                <thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500 border-b border-slate-200">
+                  <tr>
+                    <th className="py-3 px-4">User ID</th>
+                    <th className="py-3 px-4">Staff Name</th>
+                    <th className="py-3 px-4">Department / Unit</th>
+                    <th className="py-3 px-4">Assigned Role</th>
+                    <th className="py-3 px-4">Account Status</th>
+                    <th className="py-3 px-4">Last Activity</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {userAccounts.map(u => (
+                    <tr key={u.id} className="hover:bg-slate-50/80">
+                      <td className="py-3.5 px-4 font-mono font-semibold text-slate-900">{u.id}</td>
+                      <td className="py-3.5 px-4">
+                        <div className="font-semibold text-slate-900">{u.name}</div>
+                        <div className="text-[11px] text-slate-400">{u.email}</div>
+                      </td>
+                      <td className="py-3.5 px-4 text-slate-600">{u.department}</td>
+                      <td className="py-3.5 px-4">
+                        <span className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold capitalize bg-slate-100 text-slate-800 border border-slate-200">
+                          {u.role}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-4">
+                        <span className="inline-flex items-center gap-1 text-emerald-700 font-semibold text-[11px]">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                          {u.status}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-4 text-slate-500 whitespace-nowrap">{u.lastLogin}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 
@@ -564,52 +621,61 @@ export const AdminDashboardPage: React.FC = () => {
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {cameraSources.map(cam => (
-              <div key={cam.id} className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs flex flex-col justify-between">
-                <div>
-                  <div className="flex items-start justify-between gap-2 mb-2">
-                    <div>
-                      <span className="font-mono text-xs font-bold text-slate-900">{cam.id}</span>
-                      <h4 className="text-sm font-bold text-slate-800">{cam.name}</h4>
+          {cameraSources.length === 0 ? (
+            <div className="p-8 text-center bg-white rounded-xl border border-slate-200">
+              <EmptyState
+                title="No Camera Feeds Configured"
+                description="Click 'Register Camera Source' above to add roadside CCTV or operator webcam feeds to database."
+              />
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {cameraSources.map(cam => (
+                <div key={cam.id} className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-start justify-between gap-2 mb-2">
+                      <div>
+                        <span className="font-mono text-xs font-bold text-slate-900">{cam.id}</span>
+                        <h4 className="text-sm font-bold text-slate-800">{cam.name}</h4>
+                      </div>
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                        cam.status === 'ONLINE' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                        cam.status === 'STANDBY' ? 'bg-blue-50 text-blue-700 border-blue-200' :
+                        cam.status === 'DEGRADED' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                        'bg-red-50 text-red-700 border-red-200'
+                      }`}>
+                        {cam.status}
+                      </span>
                     </div>
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                      cam.status === 'ONLINE' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
-                      cam.status === 'STANDBY' ? 'bg-blue-50 text-blue-700 border-blue-200' :
-                      cam.status === 'DEGRADED' ? 'bg-amber-50 text-amber-700 border-amber-200' :
-                      'bg-red-50 text-red-700 border-red-200'
-                    }`}>
-                      {cam.status}
-                    </span>
+
+                    <div className="text-xs text-slate-500 mb-3">
+                      {cam.junction}
+                    </div>
+
+                    <div className="space-y-1.5 text-xs bg-slate-50 p-2.5 rounded-lg border border-slate-200/60 font-mono">
+                      <div className="flex justify-between text-slate-600">
+                        <span>Stream:</span>
+                        <span className="text-slate-800 font-semibold">{cam.streamType}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-600 truncate">
+                        <span>Endpoint:</span>
+                        <span className="text-slate-700 truncate max-w-[170px]" title={cam.ipOrDeviceUrl}>{cam.ipOrDeviceUrl}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-600">
+                        <span>Resolution:</span>
+                        <span className="text-slate-800">{cam.resolution} @ {cam.fps} FPS</span>
+                      </div>
+                    </div>
                   </div>
 
-                  <div className="text-xs text-slate-500 mb-3">
-                    {cam.junction}
-                  </div>
-
-                  <div className="space-y-1.5 text-xs bg-slate-50 p-2.5 rounded-lg border border-slate-200/60 font-mono">
-                    <div className="flex justify-between text-slate-600">
-                      <span>Stream:</span>
-                      <span className="text-slate-800 font-semibold">{cam.streamType}</span>
-                    </div>
-                    <div className="flex justify-between text-slate-600 truncate">
-                      <span>Endpoint:</span>
-                      <span className="text-slate-700 truncate max-w-[170px]" title={cam.ipOrDeviceUrl}>{cam.ipOrDeviceUrl}</span>
-                    </div>
-                    <div className="flex justify-between text-slate-600">
-                      <span>Resolution:</span>
-                      <span className="text-slate-800">{cam.resolution} @ {cam.fps} FPS</span>
-                    </div>
+                  <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+                    <span>Today Scans: <strong>{cam.dailyDetectionsCount}</strong></span>
+                    <span className="text-[11px] text-slate-400">Heartbeat: {cam.lastHeartbeat}</span>
                   </div>
                 </div>
-
-                <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-                  <span>Today Scans: <strong>{cam.dailyDetectionsCount}</strong></span>
-                  <span className="text-[11px] text-slate-400">Heartbeat: {cam.lastHeartbeat}</span>
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -990,11 +1056,11 @@ export const AdminDashboardPage: React.FC = () => {
               e.preventDefault();
               if (!newCamName || !newCamJunction) return;
               const newSource: CameraSourceRecord = {
-                id: `CAM-BLR-${Math.floor(10 + Math.random() * 90)}`,
+                id: '',
                 name: newCamName,
                 junction: newCamJunction,
                 streamType: newCamType,
-                status: 'ONLINE',
+                status: 'STANDBY',
                 ipOrDeviceUrl: newCamUrl || 'rtsp://10.24.110.50:554/stream1',
                 resolution: '1920x1080',
                 fps: 30,

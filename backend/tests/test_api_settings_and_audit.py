@@ -56,6 +56,8 @@ class TestSettingsAndAudit:
 
         # Cleanup
         db[COLLECTION_USERS].delete_many({"email": {"$regex": r"^test\.audit"}})
+        db["officer_shifts"].delete_many({"officerName": "Audit Admin"})
+        db[COLLECTION_AUDIT_LOGS].delete_many({"actorNameSnapshot": {"$in": ["Audit Admin", "Test Admin"]}})
 
     def _get_token(self, email: str, pwd: str) -> str:
         login_res = client.post(

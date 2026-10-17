@@ -8,6 +8,7 @@ Implements:
 - Zero public registration endpoints
 """
 
+from typing import List
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, status
 
@@ -108,4 +109,37 @@ async def get_current_user_profile(
         success=True,
         data=user_dto,
         message="Active session verified.",
+    )
+
+
+@router.get(
+    "/users",
+    response_model=ApiResponse[List[UserSummary]],
+    status_code=status.HTTP_200_OK,
+    summary="List official registered staff accounts",
+)
+async def list_users(
+    current_user: dict = Depends(get_current_user),
+):
+    """Returns all registered staff accounts from MongoDB."""
+    db = get_db()
+    cursor = db[COLLECTION_USERS].find().sort("createdAt", -1)
+    users = []
+    for u in cursor:
+        users.append(
+            UserSummary(
+                id=str(u["_id"]),
+                employeeId=u.get("employeeId", "EMP-UNKNOWN"),
+                name=u.get("name", "Officer"),
+                email=u.get("email"),
+                role=u.get("role", "reviewer"),
+                department=u.get("department"),
+                rank=u.get("rank"),
+                status=u.get("status", "ACTIVE"),
+            )
+        )
+    return ApiResponse(
+        success=True,
+        data=users,
+        message=f"Retrieved {len(users)} staff account(s).",
     )

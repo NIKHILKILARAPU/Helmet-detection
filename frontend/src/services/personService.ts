@@ -1,34 +1,54 @@
 import type { RegisteredPerson } from '../types';
-import { INITIAL_REGISTERED_PERSONS } from '../data/mockData';
 import { apiClient } from './api';
 
+export function mapBackendPerson(doc: any): RegisteredPerson {
+  return {
+    personId: doc.personReference || doc.personId || doc.id || (doc._id ? String(doc._id) : 'REG-0000'),
+    fullName: doc.fullName || 'Registered Citizen',
+    maskedMobile: doc.maskedMobile || (doc.mobile ? `${doc.mobile.substring(0, 6)}***` : '—'),
+    email: doc.email || '—',
+    city: doc.city || 'Bengaluru',
+    identityStatus: (doc.identityStatus as any) || 'VERIFIED',
+    linkedVehicles: Array.isArray(doc.linkedVehicles) ? doc.linkedVehicles.map((v: any) => ({
+      plateNumber: v.plateNumber || '—',
+      vehicleType: v.vehicleType || 'Two-Wheeler',
+      model: v.vehicleModel || v.model || 'Motorcycle',
+      registeredDate: v.registeredDate || '2025-01-01',
+      status: v.registrationStatus || v.status || 'ACTIVE'
+    })) : [],
+    notificationHistory: Array.isArray(doc.notificationHistory) ? doc.notificationHistory : [],
+    linkedCasesCount: doc.linkedCasesCount ?? 0
+  };
+}
+
 class PersonService {
-  private localPersons: RegisteredPerson[] = [...INITIAL_REGISTERED_PERSONS];
+  async getRegisteredPersons(query?: string): Promise<{ persons: RegisteredPerson[]; isDemo: boolean; error?: string }> {
+    const queryParam = query && query.trim() ? `?query=${encodeURIComponent(query.trim())}` : '';
+    const res = await apiClient.get<any[]>(`/persons${queryParam}`);
 
-  async getRegisteredPersons(query?: string): Promise<{ persons: RegisteredPerson[]; isDemo: boolean }> {
-    const res = await apiClient.get<RegisteredPerson[]>('/persons', this.localPersons);
-    let persons = res.isDemoData ? [...this.localPersons] : res.data;
-
-    if (query && query.trim() !== '') {
-      const q = query.toLowerCase().trim();
-      persons = persons.filter(p => 
-        p.fullName.toLowerCase().includes(q) ||
-        p.personId.toLowerCase().includes(q) ||
-        p.email.toLowerCase().includes(q) ||
-        p.city.toLowerCase().includes(q) ||
-        p.linkedVehicles.some(v => v.plateNumber.toLowerCase().includes(q))
-      );
+    if (!res.success || !res.data) {
+      return {
+        persons: [],
+        isDemo: false,
+        error: res.error || 'Failed to retrieve persons registry from database.'
+      };
     }
+
+    const rawList = Array.isArray(res.data) ? res.data : [];
+    const persons = rawList.map(mapBackendPerson);
 
     return {
       persons,
-      isDemo: res.isDemoData
+      isDemo: false
     };
   }
 
   async getPersonById(personId: string): Promise<RegisteredPerson | null> {
-    const found = this.localPersons.find(p => p.personId === personId);
-    return found || null;
+    const res = await apiClient.get<any>(`/persons/${encodeURIComponent(personId)}`);
+    if (!res.success || !res.data) {
+      return null;
+    }
+    return mapBackendPerson(res.data);
   }
 
   async reportMismatch(
@@ -38,19 +58,18 @@ class PersonService {
     userComments: string
   ): Promise<{ success: boolean; disputeId: string; message: string }> {
     const disputeId = `DISP-${Math.floor(10000 + Math.random() * 90000)}`;
-    await apiClient.post('/persons/dispute', {
+    const res = await apiClient.post<any>('/persons/dispute', {
       disputeId,
       personId,
       caseId,
       reason,
-      userComments,
-      submittedAt: new Date().toISOString()
-    }, { received: true });
+      userComments
+    });
 
     return {
-      success: true,
+      success: res.success,
       disputeId,
-      message: 'Your review dispute has been logged. An enforcement review officer will examine the original camera footage.'
+      message: res.message || 'Your review dispute has been logged. An enforcement review officer will examine the original camera footage.'
     };
   }
 }

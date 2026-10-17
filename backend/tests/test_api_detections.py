@@ -18,6 +18,7 @@ Verifies:
 - Proper MongoDB schema persistence (model_runs, evidence, and violations)
 """
 
+import os
 import io
 import asyncio
 import pytest
@@ -33,10 +34,11 @@ from main import app
 from app.config import settings
 from app.core.security import hash_password, create_access_token
 from app.db.connection import get_db
-from app.db.collections import COLLECTION_USERS, COLLECTION_MODEL_RUNS, COLLECTION_VIOLATIONS, COLLECTION_CAMERAS
+from app.db.collections import COLLECTION_USERS, COLLECTION_MODEL_RUNS, COLLECTION_VIOLATIONS, COLLECTION_CAMERAS, COLLECTION_AUDIT_LOGS
 from app.models.yolo_inference import yolo_engine
 from app.models.roboflow_inference import roboflow_engine, RoboflowInferenceEngine
 from app.core.exceptions import ModelNotAvailableError, RemoteInferenceError
+from app.api.detections import EVIDENCE_UPLOAD_DIR
 
 client = TestClient(app)
 
@@ -119,6 +121,15 @@ def setup_operator_user():
     db[COLLECTION_CAMERAS].delete_many({"name": "TEST_DETECTIONS_CAM"})
     db[COLLECTION_MODEL_RUNS].delete_many({"modelName": {"$regex": r"^(YOLO|Roboflow)"}})
     db[COLLECTION_VIOLATIONS].delete_many({"caseId": {"$regex": r"^TG-2026-"}})
+    db[COLLECTION_AUDIT_LOGS].delete_many({"actorNameSnapshot": "Operator Detection Tester"})
+
+    # Clean up synthetic test evidence files created during test runs
+    if os.path.exists(EVIDENCE_UPLOAD_DIR):
+        for f in os.listdir(EVIDENCE_UPLOAD_DIR):
+            try:
+                os.remove(os.path.join(EVIDENCE_UPLOAD_DIR, f))
+            except Exception:
+                pass
 
 
 @pytest.fixture

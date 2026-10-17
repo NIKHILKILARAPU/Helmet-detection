@@ -42,6 +42,7 @@ export interface AppContextType {
   rejectCase: (caseId: string, reason: string, notes?: string) => void;
   addNewCapturedCase: (newCase: ViolationCase) => void;
   addCameraSource: (newSource: CameraSourceRecord) => void;
+  refreshAllData: () => Promise<void>;
 }
 
 export const AppContext = createContext<AppContextType | undefined>(undefined);

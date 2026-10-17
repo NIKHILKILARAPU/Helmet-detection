@@ -185,6 +185,7 @@ export interface DashboardStats {
   todayPendingReview: number;
   todayApprovedDrafts: number;
   todayRejectedCases: number;
+  complianceRatePercent?: number;
   hourlyTrends: HourlyStat[];
   monthlyTrends: MonthlyStat[];
   dailyHistory: DailyStat[];

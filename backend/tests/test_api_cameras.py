@@ -40,6 +40,7 @@ class TestCameraEndpoints:
         # Cleanup
         db[COLLECTION_USERS].delete_many({"email": "test.camop@traffic.gov.in"})
         db[COLLECTION_CAMERAS].delete_many({"name": {"$regex": r"^TEST|^North Junction"}})
+        db["audit_logs"].delete_many({"actorNameSnapshot": "Operator Testing"})
 
     def _get_operator_token(self) -> str:
         login_res = client.post(

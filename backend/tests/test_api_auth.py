@@ -219,6 +219,17 @@ class TestRolePermissionMatrix:
         assert data["success"] is True
         assert data["data"]["minConfidenceThreshold"] == 0.60
 
+    def test_authenticated_user_can_list_staff_users(self):
+        """Authenticated staff can list registered users."""
+        token = self._get_token("test.admin@traffic.gov.in", "AdminPass123!")
+        headers = {"Authorization": f"Bearer {token}"}
+        response = client.get(f"{settings.API_PREFIX}/auth/users", headers=headers)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert isinstance(data["data"], list)
+        assert len(data["data"]) >= 1
+
 
 class TestBootstrapAdmin:
     """Verifies the initial admin bootstrap CLI tool."""

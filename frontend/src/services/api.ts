@@ -4,10 +4,11 @@ export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localho
 
 export interface ApiResponse<T> {
   success: boolean;
-  data: T;
-  isDemoData: boolean;
+  data?: T;
   message?: string;
+  error?: string;
   errorCode?: string;
+  isDemoData?: boolean;
 }
 
 export interface ApiErrorDetail {
@@ -31,6 +32,7 @@ class ApiClient {
 
   constructor(baseUrl: string) {
     this.baseUrl = baseUrl;
+    this.cleanupObsoleteStorage();
   }
 
   getBaseUrl(): string {
@@ -57,6 +59,29 @@ class ApiClient {
     }
   }
 
+  cleanupObsoleteStorage(): void {
+    try {
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (
+          key &&
+          (key.startsWith('demo_') ||
+            key.startsWith('mock_') ||
+            key.startsWith('test_') ||
+            key === 'trafficguard_demo_mode' ||
+            key === 'trafficguard_mock_cases' ||
+            key === 'trafficguard_sample_data')
+        ) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach(k => localStorage.removeItem(k));
+    } catch {
+      // ignore
+    }
+  }
+
   private getAuthHeaders(): Record<string, string> {
     const token = this.getAuthToken();
     return token ? { Authorization: `Bearer ${token}` } : {};
@@ -77,10 +102,10 @@ class ApiClient {
     }
   }
 
-  async get<T>(endpoint: string, fallbackData: T): Promise<ApiResponse<T>> {
+  async get<T>(endpoint: string): Promise<ApiResponse<T>> {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3000);
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
       const res = await fetch(`${this.baseUrl}${endpoint}`, {
         headers: {
           ...this.getAuthHeaders(),
@@ -89,31 +114,37 @@ class ApiClient {
       });
       clearTimeout(timeoutId);
 
+      const json = await res.json().catch(() => null);
+
       if (!res.ok) {
-        throw new Error(`HTTP error ${res.status}: ${res.statusText}`);
+        return {
+          success: false,
+          error: json?.message || `Server returned HTTP ${res.status}`,
+          errorCode: json?.error_code || `HTTP_${res.status}`,
+          isDemoData: false
+        };
       }
 
-      const json = await res.json();
       return {
         success: true,
-        data: json.data || json,
-        isDemoData: false,
+        data: json?.data !== undefined ? json.data : json,
+        message: json?.message,
+        isDemoData: false
       };
-    } catch {
-      // Graceful fallback to demo data with clear transparency
+    } catch (err: any) {
       return {
-        success: true,
-        data: fallbackData,
-        isDemoData: true,
-        message: 'Operating in Demo Mode (Mock Data)',
+        success: false,
+        error: err.message || 'Network request failed. Ensure backend is running.',
+        errorCode: 'NETWORK_ERROR',
+        isDemoData: false
       };
     }
   }
 
-  async post<T, B = unknown>(endpoint: string, body: B, fallbackData: T): Promise<ApiResponse<T>> {
+  async post<T, B = unknown>(endpoint: string, body: B): Promise<ApiResponse<T>> {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3000);
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
       const res = await fetch(`${this.baseUrl}${endpoint}`, {
         method: 'POST',
         headers: {
@@ -125,22 +156,111 @@ class ApiClient {
       });
       clearTimeout(timeoutId);
 
+      const json = await res.json().catch(() => null);
+
       if (!res.ok) {
-        throw new Error(`HTTP error ${res.status}: ${res.statusText}`);
+        return {
+          success: false,
+          error: json?.message || `Server returned HTTP ${res.status}`,
+          errorCode: json?.error_code || `HTTP_${res.status}`,
+          isDemoData: false
+        };
       }
 
-      const json = await res.json();
       return {
         success: true,
-        data: json.data || json,
-        isDemoData: false,
+        data: json?.data !== undefined ? json.data : json,
+        message: json?.message,
+        isDemoData: false
       };
-    } catch {
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err.message || 'Network request failed.',
+        errorCode: 'NETWORK_ERROR',
+        isDemoData: false
+      };
+    }
+  }
+
+  async patch<T, B = unknown>(endpoint: string, body: B): Promise<ApiResponse<T>> {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
+      const res = await fetch(`${this.baseUrl}${endpoint}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          ...this.getAuthHeaders(),
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      const json = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        return {
+          success: false,
+          error: json?.message || `Server returned HTTP ${res.status}`,
+          errorCode: json?.error_code || `HTTP_${res.status}`,
+          isDemoData: false
+        };
+      }
+
       return {
         success: true,
-        data: fallbackData,
-        isDemoData: true,
-        message: 'Simulated in Demo Mode',
+        data: json?.data !== undefined ? json.data : json,
+        message: json?.message,
+        isDemoData: false
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err.message || 'Network request failed.',
+        errorCode: 'NETWORK_ERROR',
+        isDemoData: false
+      };
+    }
+  }
+
+  async delete<T>(endpoint: string): Promise<ApiResponse<T>> {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
+      const res = await fetch(`${this.baseUrl}${endpoint}`, {
+        method: 'DELETE',
+        headers: {
+          ...this.getAuthHeaders(),
+        },
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      const json = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        return {
+          success: false,
+          error: json?.message || `Server returned HTTP ${res.status}`,
+          errorCode: json?.error_code || `HTTP_${res.status}`,
+          isDemoData: false
+        };
+      }
+
+      return {
+        success: true,
+        data: json?.data !== undefined ? json.data : json,
+        message: json?.message,
+        isDemoData: false
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err.message || 'Network request failed.',
+        errorCode: 'NETWORK_ERROR',
+        isDemoData: false
       };
     }
   }

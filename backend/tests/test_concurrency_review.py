@@ -73,6 +73,7 @@ class TestConcurrencyAndReviewWorkflow:
         # Clean up
         db[COLLECTION_USERS].delete_many({"email": "test.concrev@traffic.gov.in"})
         db[COLLECTION_VIOLATIONS].delete_many({"caseId": case_id})
+        db["audit_logs"].delete_many({"actorNameSnapshot": "Officer Trustworthy"})
 
     def _get_reviewer_token(self) -> str:
         login_res = client.post(

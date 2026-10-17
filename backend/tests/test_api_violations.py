@@ -58,6 +58,7 @@ class TestViolationsEndpoints:
         # Cleanup
         db[COLLECTION_USERS].delete_many({"email": "test.viorev@traffic.gov.in"})
         db[COLLECTION_VIOLATIONS].delete_many({"caseId": "TG-2026-8941"})
+        db["audit_logs"].delete_many({"actorNameSnapshot": "Officer R. Sharma"})
 
     def _get_reviewer_token(self) -> str:
         login_res = client.post(

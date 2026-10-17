@@ -1,32 +1,67 @@
 import type { SystemHealthState } from '../types';
-import { INITIAL_SYSTEM_HEALTH } from '../data/mockData';
 import { apiClient } from './api';
+
+export const INITIAL_SYSTEM_HEALTH_CLEAN: SystemHealthState = {
+  api: {
+    status: 'ONLINE',
+    responseTimeMs: 0,
+    lastChecked: 'Initializing...',
+    message: 'Connecting to enforcement gateway...'
+  },
+  database: {
+    status: 'ONLINE',
+    responseTimeMs: 0,
+    lastChecked: 'Initializing...',
+    message: 'Verifying MongoDB replica set...'
+  },
+  model: {
+    status: 'READY',
+    responseTimeMs: 0,
+    lastChecked: 'Initializing...',
+    message: 'Verifying inference engine...'
+  },
+  camera: {
+    status: 'ONLINE',
+    lastChecked: 'Initializing...',
+    message: 'Live hardware capture ready'
+  },
+  isBackendConnected: false,
+  isDemoMode: false
+};
 
 class HealthService {
   async checkHealth(): Promise<SystemHealthState> {
-    const isLive = await apiClient.isBackendLive();
     const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const res = await apiClient.get<any>('/health');
 
-    if (isLive) {
+    if (res.success && res.data) {
+      const data = res.data;
+      const dbInfo = data.database || {};
+      const dbStatus = dbInfo.status === 'ONLINE' ? 'ONLINE' : 'OFFLINE';
+      const modelStatus = (data.yolo_model === 'READY' || data.yolo_model === 'ONLINE') ? 'READY' : 'OFFLINE';
+
       return {
-        ...INITIAL_SYSTEM_HEALTH,
         api: {
-          status: 'ONLINE',
-          responseTimeMs: 18,
+          status: data.status === 'ONLINE' ? 'ONLINE' : 'DEGRADED',
+          responseTimeMs: dbInfo.latency_ms || 1,
           lastChecked: now,
-          message: 'Connected to live FastAPI backend'
+          message: data.message || 'All enforcement microservices operational'
         },
         database: {
-          status: 'ONLINE',
-          responseTimeMs: 8,
+          status: dbStatus,
+          responseTimeMs: dbInfo.latency_ms || 0,
           lastChecked: now,
-          message: 'MongoDB replica connected'
+          message: dbInfo.is_ready ? `Connected to ${dbInfo.database || 'helmet_challan_db'}` : (dbInfo.error || 'Database unavailable')
         },
         model: {
-          status: 'READY',
-          responseTimeMs: 72,
+          status: modelStatus,
           lastChecked: now,
-          message: 'YOLOv8 inference server active'
+          message: modelStatus === 'READY' ? 'Inference engine operational' : 'Model weights or API key unconfigured'
+        },
+        camera: {
+          status: 'ONLINE',
+          lastChecked: now,
+          message: 'Video hardware interface ready'
         },
         isBackendConnected: true,
         isDemoMode: false
@@ -34,27 +69,28 @@ class HealthService {
     }
 
     return {
-      ...INITIAL_SYSTEM_HEALTH,
       api: {
-        status: 'ONLINE',
-        responseTimeMs: 24,
+        status: 'OFFLINE',
         lastChecked: now,
-        message: 'FastAPI integration boundary ready (Demo Mode)'
+        message: res.error || 'Cannot reach FastAPI backend (port 8000)'
       },
       database: {
-        status: 'ONLINE',
-        responseTimeMs: 12,
+        status: 'OFFLINE',
         lastChecked: now,
-        message: 'In-Memory demo state active'
+        message: 'Backend gateway unreachable'
       },
       model: {
-        status: 'DEMO_STANDIN',
-        responseTimeMs: 0,
+        status: 'OFFLINE',
         lastChecked: now,
-        message: 'Realistic demo pipeline stand-in active'
+        message: 'Backend gateway unreachable'
+      },
+      camera: {
+        status: 'OFFLINE',
+        lastChecked: now,
+        message: 'Camera service standby'
       },
       isBackendConnected: false,
-      isDemoMode: true
+      isDemoMode: false
     };
   }
 }
