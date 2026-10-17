@@ -263,5 +263,7 @@ export interface DetectionAnalysisResult {
     loadError?: string | null;
     expectedClasses: string[];
   };
+  isDeduplicated?: boolean;
+  cooldownSecondsRemaining?: number | null;
 }
 

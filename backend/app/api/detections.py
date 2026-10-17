@@ -15,7 +15,7 @@ import os
 import time
 import hashlib
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, List
 from bson import ObjectId
 import numpy as np
@@ -98,6 +98,7 @@ async def analyze_frame(
     camera_id: Optional[str] = Form(None, description="Optional registered camera ObjectId string"),
     source_label: Optional[str] = Form("Operator Live Station", description="Human-readable camera source title"),
     auto_ingest: bool = Form(True, description="Automatically queue candidate violations in reviewer desk"),
+    cooldown_seconds: int = Form(15, description="Cooldown window in seconds for deduplicating repeated violations on this camera"),
     current_user: dict = Depends(require_authenticated_staff),
 ):
     """
@@ -180,11 +181,107 @@ async def analyze_frame(
     now = datetime.now(timezone.utc)
     model_run_id: Optional[str] = None
     case_id: Optional[str] = None
+    is_deduplicated = False
+    cooldown_remaining: Optional[int] = None
 
-    # 6. MongoDB persistence
+    # 6. MongoDB persistence and violation deduplication
     try:
         db = get_db()
         camera_oid = _resolve_camera_oid(db, camera_id)
+
+        # If candidate violation detected and auto_ingest enabled, check cooldown before creating draft
+        if det_result["isCandidateViolation"] and auto_ingest and det_result["violationType"]:
+            if cooldown_seconds > 0:
+                cooldown_cutoff = now - timedelta(seconds=cooldown_seconds)
+                recent_violation = db[COLLECTION_VIOLATIONS].find_one(
+                    {
+                        "cameraId": camera_oid,
+                        "createdAt": {"$gte": cooldown_cutoff},
+                        "status": "PENDING_REVIEW",
+                    },
+                    sort=[("createdAt", -1)],
+                )
+                if recent_violation:
+                    is_deduplicated = True
+                    case_id = recent_violation.get("caseId")
+                    created_at = recent_violation.get("createdAt")
+                    if created_at:
+                        if created_at.tzinfo is None:
+                            created_at = created_at.replace(tzinfo=timezone.utc)
+                        elapsed = (now - created_at).total_seconds()
+                        cooldown_remaining = max(0, int(cooldown_seconds - elapsed))
+
+            if not is_deduplicated:
+                case_id = f"TG-2026-{abs(hash(str(camera_oid) + str(now.timestamp()))) % 100000:05d}"
+                
+                # Map bounding boxes to schema requirements
+                schema_boxes = [
+                    {
+                        "className": b["label"],
+                        "confidence": b["confidence"],
+                        "coordinates": {
+                            "ymin": b["normalized"][0],
+                            "xmin": b["normalized"][1],
+                            "ymax": b["normalized"][2],
+                            "xmax": b["normalized"][3],
+                        },
+                    }
+                    for b in det_result["boxes"]
+                ]
+
+                evidence_obj = {
+                    "storagePath": relative_storage_path,
+                    "fileHash": file_hash,
+                    "mimeType": content_type or "image/jpeg",
+                    "width": width,
+                    "height": height,
+                    "fileSizeBytes": file_size,
+                }
+
+                violation_doc = {
+                    "caseId": case_id,
+                    "cameraId": camera_oid,
+                    "capturedAt": now,
+                    "violationType": det_result["violationType"],
+                    "confidence": det_result["violationConfidence"],
+                    "status": "PENDING_REVIEW",  # Strictly pending review; never automatically fine
+                    "evidence": evidence_obj,
+                    "evidenceQuality": "HIGH",
+                    "boundingBoxes": schema_boxes,
+                    "identityVerificationStatus": "UNVERIFIED",
+                    "reviewerNotes": None,
+                    "rejectionReason": None,
+                    "challanDraftNumber": None,
+                    "draftAmountInr": None,
+                    "reviewedBy": None,
+                    "reviewedAt": None,
+                    "createdAt": now,
+                    "updatedAt": now,
+                }
+                db[COLLECTION_VIOLATIONS].insert_one(violation_doc)
+
+                # Record append-only audit trail
+                audit_entry = {
+                    "timestamp": now,
+                    "actorUserId": ObjectId(current_user["id"]) if ObjectId.is_valid(current_user["id"]) else None,
+                    "actorNameSnapshot": current_user["name"],
+                    "actorRoleSnapshot": current_user["role"],
+                    "action": "AI_CANDIDATE_INGESTED",
+                    "entityType": "violation",
+                    "entityId": case_id,
+                    "notes": f"Automated AI detection candidate logged: {det_result['violationType']}.",
+                    "metadata": {
+                        "confidence": det_result["violationConfidence"],
+                        "sourceLabel": source_label,
+                        "cameraId": str(camera_oid),
+                        "modelRunId": None,
+                    },
+                    "requestId": None,
+                }
+                try:
+                    db[COLLECTION_AUDIT_LOGS].insert_one(audit_entry)
+                except Exception:
+                    pass
 
         # Log to model_runs collection
         model_run_doc = {
@@ -199,85 +296,14 @@ async def analyze_frame(
                 "personsCount": len(det_result["persons"]),
                 "isCandidateViolation": det_result["isCandidateViolation"],
                 "violationType": det_result["violationType"],
+                "isDeduplicated": is_deduplicated,
+                "cooldownRemaining": cooldown_remaining,
             },
             "status": "SUCCESS",
             "errorMessage": None,
         }
         run_res = db[COLLECTION_MODEL_RUNS].insert_one(model_run_doc)
         model_run_id = str(run_res.inserted_id)
-
-        # If candidate violation detected and auto_ingest enabled, create candidate case
-        if det_result["isCandidateViolation"] and auto_ingest and det_result["violationType"]:
-            case_id = f"TG-2026-{abs(hash(str(camera_oid) + str(now.timestamp()))) % 100000:05d}"
-            
-            # Map bounding boxes to schema requirements
-            schema_boxes = [
-                {
-                    "className": b["label"],
-                    "confidence": b["confidence"],
-                    "coordinates": {
-                        "ymin": b["normalized"][0],
-                        "xmin": b["normalized"][1],
-                        "ymax": b["normalized"][2],
-                        "xmax": b["normalized"][3],
-                    },
-                }
-                for b in det_result["boxes"]
-            ]
-
-            evidence_obj = {
-                "storagePath": relative_storage_path,
-                "fileHash": file_hash,
-                "mimeType": content_type or "image/jpeg",
-                "width": width,
-                "height": height,
-                "fileSizeBytes": file_size,
-            }
-
-            violation_doc = {
-                "caseId": case_id,
-                "cameraId": camera_oid,
-                "capturedAt": now,
-                "violationType": det_result["violationType"],
-                "confidence": det_result["violationConfidence"],
-                "status": "PENDING_REVIEW",  # Strictly pending review; never automatically fine
-                "evidence": evidence_obj,
-                "evidenceQuality": "HIGH",
-                "boundingBoxes": schema_boxes,
-                "identityVerificationStatus": "UNVERIFIED",
-                "reviewerNotes": None,
-                "rejectionReason": None,
-                "challanDraftNumber": None,
-                "draftAmountInr": None,
-                "reviewedBy": None,
-                "reviewedAt": None,
-                "createdAt": now,
-                "updatedAt": now,
-            }
-            db[COLLECTION_VIOLATIONS].insert_one(violation_doc)
-
-            # Record append-only audit trail
-            audit_entry = {
-                "timestamp": now,
-                "actorUserId": ObjectId(current_user["id"]) if ObjectId.is_valid(current_user["id"]) else None,
-                "actorNameSnapshot": current_user["name"],
-                "actorRoleSnapshot": current_user["role"],
-                "action": "AI_CANDIDATE_INGESTED",
-                "entityType": "violation",
-                "entityId": case_id,
-                "notes": f"Automated AI detection candidate logged: {det_result['violationType']}.",
-                "metadata": {
-                    "confidence": det_result["violationConfidence"],
-                    "sourceLabel": source_label,
-                    "cameraId": str(camera_oid),
-                    "modelRunId": model_run_id,
-                },
-                "requestId": None,
-            }
-            try:
-                db[COLLECTION_AUDIT_LOGS].insert_one(audit_entry)
-            except Exception:
-                pass
 
     except Exception as exc:
         logger.error(f"Database error during detection logging: {exc}")
@@ -334,6 +360,8 @@ async def analyze_frame(
         processingTimeMs=processing_time_ms,
         imageDimensions={"width": width, "height": height},
         modelInfo=active_model_info,
+        isDeduplicated=is_deduplicated,
+        cooldownSecondsRemaining=cooldown_remaining,
     )
 
     return ApiResponse(

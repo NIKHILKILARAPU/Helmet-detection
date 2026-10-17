@@ -28,7 +28,11 @@ class CameraService {
     }
   }
 
-  async startWebcam(videoElement: HTMLVideoElement, deviceId?: string): Promise<MediaStream> {
+  async startWebcam(
+    videoElement: HTMLVideoElement,
+    deviceId?: string,
+    onStreamEnded?: () => void
+  ): Promise<MediaStream> {
     this.stopWebcam();
 
     const constraints: MediaStreamConstraints = {
@@ -42,12 +46,78 @@ class CameraService {
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       this.activeStream = stream;
       videoElement.srcObject = stream;
+
+      // Listen for stream track termination (e.g. camera unplugged or revoked permissions)
+      stream.getVideoTracks().forEach(track => {
+        track.onended = () => {
+          this.stopWebcam();
+          if (onStreamEnded) {
+            onStreamEnded();
+          }
+        };
+      });
+
       await videoElement.play();
+
+      // Wait for valid video metadata and dimensions (> 0) before allowing captures
+      await this.waitForVideoDimensions(videoElement);
+
       return stream;
     } catch (err) {
       this.stopWebcam();
       throw err;
     }
+  }
+
+  /**
+   * Waits until the video element has loaded metadata and nonzero optical dimensions.
+   */
+  async waitForVideoDimensions(
+    videoElement: HTMLVideoElement,
+    timeoutMs: number = 6000
+  ): Promise<{ width: number; height: number }> {
+    if (videoElement.videoWidth > 0 && videoElement.videoHeight > 0) {
+      return { width: videoElement.videoWidth, height: videoElement.videoHeight };
+    }
+
+    return new Promise((resolve, reject) => {
+      let resolved = false;
+      const timeoutId = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          cleanup();
+          if (videoElement.videoWidth > 0 && videoElement.videoHeight > 0) {
+            resolve({ width: videoElement.videoWidth, height: videoElement.videoHeight });
+          } else {
+            reject(new Error('Hardware timeout: Video metadata and valid dimensions not received within 6 seconds.'));
+          }
+        }
+      }, timeoutMs);
+
+      const checkDimensions = () => {
+        if (!resolved && videoElement.videoWidth > 0 && videoElement.videoHeight > 0) {
+          resolved = true;
+          cleanup();
+          resolve({ width: videoElement.videoWidth, height: videoElement.videoHeight });
+        }
+      };
+
+      const onMetadata = () => {
+        checkDimensions();
+      };
+
+      const cleanup = () => {
+        clearTimeout(timeoutId);
+        videoElement.removeEventListener('loadedmetadata', onMetadata);
+        videoElement.removeEventListener('playing', onMetadata);
+      };
+
+      videoElement.addEventListener('loadedmetadata', onMetadata);
+      videoElement.addEventListener('playing', onMetadata);
+
+      // Check immediately if already populated
+      checkDimensions();
+    });
   }
 
   stopWebcam(): void {
@@ -68,27 +138,39 @@ class CameraService {
   }
 
   captureFrame(videoElement: HTMLVideoElement): string {
+    const width = videoElement.videoWidth;
+    const height = videoElement.videoHeight;
+    if (!width || !height || width <= 0 || height <= 0) {
+      throw new Error('Video dimensions are not ready (0x0). Please wait for camera stream.');
+    }
+
     const canvas = document.createElement('canvas');
-    canvas.width = videoElement.videoWidth || 640;
-    canvas.height = videoElement.videoHeight || 480;
+    canvas.width = width;
+    canvas.height = height;
     const ctx = canvas.getContext('2d');
     if (!ctx) {
       throw new Error('Canvas 2D context unavailable');
     }
-    ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+    ctx.drawImage(videoElement, 0, 0, width, height);
     return canvas.toDataURL('image/jpeg', 0.85);
   }
 
   captureFrameBlob(videoElement: HTMLVideoElement): Promise<Blob> {
     return new Promise((resolve, reject) => {
+      const width = videoElement.videoWidth;
+      const height = videoElement.videoHeight;
+      if (!width || !height || width <= 0 || height <= 0) {
+        return reject(new Error('Video dimensions are not ready (0x0). Please wait for camera stream.'));
+      }
+
       const canvas = document.createElement('canvas');
-      canvas.width = videoElement.videoWidth || 640;
-      canvas.height = videoElement.videoHeight || 480;
+      canvas.width = width;
+      canvas.height = height;
       const ctx = canvas.getContext('2d');
       if (!ctx) {
         return reject(new Error('Canvas 2D context unavailable'));
       }
-      ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+      ctx.drawImage(videoElement, 0, 0, width, height);
       canvas.toBlob(
         blob => {
           if (blob) {
@@ -106,7 +188,8 @@ class CameraService {
   async analyzeFrame(
     imageFileOrBlob: File | Blob,
     cameraId?: string,
-    sourceLabel: string = 'Operator Live Station'
+    sourceLabel: string = 'Operator Live Station',
+    cooldownSeconds: number = 15
   ) {
     const formData = new FormData();
     if (imageFileOrBlob instanceof File) {
@@ -119,6 +202,7 @@ class CameraService {
     }
     formData.append('source_label', sourceLabel);
     formData.append('auto_ingest', 'true');
+    formData.append('cooldown_seconds', cooldownSeconds.toString());
 
     return apiClient.upload<any>('/detections/analyze', formData);
   }

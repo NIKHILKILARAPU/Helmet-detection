@@ -21,7 +21,7 @@ Verifies:
 import io
 import asyncio
 import pytest
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from unittest.mock import MagicMock, AsyncMock, patch
 from bson import ObjectId
 import numpy as np
@@ -377,7 +377,7 @@ class TestRoboflowInferenceEngineUnit:
         assert res["violationConfidence"] == 0.94
 
         box = res["boxes"][0]
-        assert box["label"] == "WITHOUT_HELMET"
+        assert box["label"] == "Without Helmet"
         assert box["category"] == "HELMET_VIOLATION"
         # Center x=300, w=100 -> x1=250, x2=350. Center y=200, h=80 -> y1=160, y2=240
         assert box["xyxy"] == [250.0, 160.0, 350.0, 240.0]
@@ -450,9 +450,12 @@ class TestRoboflowApiIntegration:
         original_key = roboflow_engine.api_key
         settings.INFERENCE_PROVIDER = "roboflow"
         roboflow_engine.api_key = "test_roboflow_mock_key_999"
+        db = get_db()
+        db[COLLECTION_VIOLATIONS].delete_many({"cameraId": ObjectId("65f000000000000000000099")})
         yield
         settings.INFERENCE_PROVIDER = original_provider
         roboflow_engine.api_key = original_key
+        db[COLLECTION_VIOLATIONS].delete_many({"cameraId": ObjectId("65f000000000000000000099")})
 
     def test_roboflow_analyze_without_helmet_queues_pending_review(self, auth_headers):
         """
@@ -515,10 +518,11 @@ class TestRoboflowApiIntegration:
         assert payload["modelInfo"]["modelId"] == "helmet-and-no-helmet-rider-detection/6"
 
         box = payload["boxes"][0]
-        assert box["label"] == "WITHOUT_HELMET"
+        assert box["label"] == "Without Helmet"
         assert box["category"] == "HELMET_VIOLATION"
         assert box["color"] == "#DC2626"
         assert box["confidence"] == 0.952
+        assert payload["isDeduplicated"] is False
 
         # Verify MongoDB persistence
         db = get_db()
@@ -532,6 +536,85 @@ class TestRoboflowApiIntegration:
         assert run_doc is not None
         assert run_doc["modelName"] == "Roboflow:helmet-and-no-helmet-rider-detection"
         assert run_doc["modelVersion"] == "6"
+
+    def test_roboflow_cooldown_deduplication_suppresses_duplicate_violations(self, auth_headers):
+        """
+        When periodic automatic capture runs, repeated detections within the cooldown
+        window must NOT create duplicate violation documents in MongoDB.
+        """
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    {
+                        "x": 320.0,
+                        "y": 180.0,
+                        "width": 120.0,
+                        "height": 140.0,
+                        "confidence": 0.945,
+                        "class": "Without Helmet",
+                        "class_id": 1,
+                    }
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/helmet-and-no-helmet-rider-detection/6"),
+        )
+
+        img_bytes = _create_test_image_bytes(width=640, height=480)
+        files1 = {"file": ("rider_1.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {
+            "camera_id": "65f000000000000000000099",
+            "source_label": "Cooldown Test Camera",
+            "auto_ingest": "true",
+            "cooldown_seconds": "30",
+        }
+
+        db = get_db()
+        initial_count = db[COLLECTION_VIOLATIONS].count_documents({"cameraId": ObjectId("65f000000000000000000099")})
+
+        # Frame 1: Initial violation capture
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp1 = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files1,
+                data=form_data,
+                headers=auth_headers,
+            )
+
+        assert resp1.status_code == 200
+        data1 = resp1.json()["data"]
+        assert data1["isCandidateViolation"] is True
+        assert data1["isDeduplicated"] is False
+        case_id_1 = data1["caseId"]
+        assert case_id_1 is not None
+
+        count_after_first = db[COLLECTION_VIOLATIONS].count_documents({"cameraId": ObjectId("65f000000000000000000099")})
+        assert count_after_first == initial_count + 1
+
+        # Frame 2: Immediate follow-up frame (within 30s cooldown)
+        files2 = {"file": ("rider_2.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp2 = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files2,
+                data=form_data,
+                headers=auth_headers,
+            )
+
+        assert resp2.status_code == 200
+        data2 = resp2.json()["data"]
+        assert data2["isCandidateViolation"] is True
+        # Must be deduplicated!
+        assert data2["isDeduplicated"] is True
+        assert data2["cooldownSecondsRemaining"] is not None
+        assert data2["cooldownSecondsRemaining"] > 0
+        assert data2["caseId"] == case_id_1
+
+        # Violation collection count MUST NOT increase!
+        count_after_second = db[COLLECTION_VIOLATIONS].count_documents({"cameraId": ObjectId("65f000000000000000000099")})
+        assert count_after_second == count_after_first
 
     def test_roboflow_analyze_with_helmet_compliant(self, auth_headers):
         """Simulates remote Roboflow detecting 'With Helmet' -> NO_VIOLATION."""
@@ -569,7 +652,7 @@ class TestRoboflowApiIntegration:
         assert payload["detected"] is True
         assert payload["isCandidateViolation"] is False
         assert payload["status"] == "NO_VIOLATION"
-        assert payload["boxes"][0]["label"] == "WITH_HELMET"
+        assert payload["boxes"][0]["label"] == "With Helmet"
         assert payload["boxes"][0]["category"] == "HELMET_COMPLIANT"
         assert payload["boxes"][0]["color"] == "#15803D"
 
@@ -606,7 +689,7 @@ class TestRoboflowApiIntegration:
 
         assert response.status_code == 200
         payload = response.json()["data"]
-        assert payload["boxes"][0]["label"] == "LICENCE"
+        assert payload["boxes"][0]["label"] == "licence"
         assert payload["boxes"][0]["category"] == "LICENSE_PLATE"
         assert payload["boxes"][0]["color"] == "#D97706"
         assert payload["isCandidateViolation"] is False
@@ -683,3 +766,147 @@ class TestRoboflowApiIntegration:
         assert "With Helmet" in info["expectedClasses"]
         assert "Without Helmet" in info["expectedClasses"]
         assert "licence" in info["expectedClasses"]
+
+    def test_periodic_capture_cooldown_expiry_creates_new_case(self, auth_headers):
+        """
+        When the configured cooldown window has elapsed, the next periodic capture
+        must generate a new violation case and not deduplicate.
+        """
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    {
+                        "x": 300.0,
+                        "y": 200.0,
+                        "width": 100.0,
+                        "height": 100.0,
+                        "confidence": 0.92,
+                        "class": "Without Helmet",
+                        "class_id": 1,
+                    }
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/helmet-and-no-helmet-rider-detection/6"),
+        )
+
+        camera_oid = ObjectId("65f000000000000000000088")
+        db = get_db()
+        db[COLLECTION_VIOLATIONS].delete_many({"cameraId": camera_oid})
+
+        img_bytes = _create_test_image_bytes(width=640, height=480)
+        files = {"file": ("periodic_frame.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {
+            "camera_id": str(camera_oid),
+            "source_label": "Periodic Expiry Test",
+            "auto_ingest": "true",
+            "cooldown_seconds": "5",
+        }
+
+        # 1. First capture creates violation
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp1 = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                data=form_data,
+                headers=auth_headers,
+            )
+        assert resp1.status_code == 200
+        data1 = resp1.json()["data"]
+        assert data1["isCandidateViolation"] is True
+        assert data1["isDeduplicated"] is False
+        case_id_1 = data1["caseId"]
+
+        # 2. Simulate time passing by shifting the violation's createdAt back by 10 seconds (exceeding 5s cooldown)
+        past_time = datetime.now(timezone.utc) - timedelta(seconds=10)
+        db[COLLECTION_VIOLATIONS].update_one(
+            {"caseId": case_id_1},
+            {"$set": {"createdAt": past_time, "capturedAt": past_time}}
+        )
+
+        # 3. Next periodic tick after cooldown expired
+        files2 = {"file": ("periodic_frame_2.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp2 = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files2,
+                data=form_data,
+                headers=auth_headers,
+            )
+        assert resp2.status_code == 200
+        data2 = resp2.json()["data"]
+        assert data2["isCandidateViolation"] is True
+        assert data2["isDeduplicated"] is False
+        assert data2["caseId"] != case_id_1
+
+        # Both distinct violations exist
+        total = db[COLLECTION_VIOLATIONS].count_documents({"cameraId": camera_oid})
+        assert total == 2
+
+    def test_periodic_capture_custom_cooldown_override(self, auth_headers):
+        """
+        Verify that passing a custom cooldown_seconds parameter (e.g. 60s)
+        is respected by the API deduplication logic.
+        """
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    {
+                        "x": 300.0,
+                        "y": 200.0,
+                        "width": 100.0,
+                        "height": 100.0,
+                        "confidence": 0.91,
+                        "class": "Without Helmet",
+                        "class_id": 1,
+                    }
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/helmet-and-no-helmet-rider-detection/6"),
+        )
+
+        camera_oid = ObjectId("65f000000000000000000077")
+        db = get_db()
+        db[COLLECTION_VIOLATIONS].delete_many({"cameraId": camera_oid})
+
+        img_bytes = _create_test_image_bytes(width=640, height=480)
+        files = {"file": ("periodic_frame.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {
+            "camera_id": str(camera_oid),
+            "source_label": "Custom Cooldown Test",
+            "auto_ingest": "true",
+            "cooldown_seconds": "60",
+        }
+
+        # First capture
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp1 = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                data=form_data,
+                headers=auth_headers,
+            )
+        assert resp1.status_code == 200
+        data1 = resp1.json()["data"]
+        assert data1["isDeduplicated"] is False
+
+        # Immediate follow-up tick (within 60s cooldown)
+        files2 = {"file": ("periodic_frame_2.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp2 = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files2,
+                data=form_data,
+                headers=auth_headers,
+            )
+        assert resp2.status_code == 200
+        data2 = resp2.json()["data"]
+        assert data2["isDeduplicated"] is True
+        assert data2["cooldownSecondsRemaining"] is not None
+        assert 50 <= data2["cooldownSecondsRemaining"] <= 60
+

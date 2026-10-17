@@ -187,12 +187,10 @@ class RoboflowInferenceEngine:
             pct_w = round(max(0.0, (x2 - x1) / width) * 100, 2)
             pct_h = round(max(0.0, (y2 - y1) / height) * 100, 2)
 
-            # Keep formatted uppercase label for UI consistency
-            display_label = raw_label.upper().replace(" ", "_")
-
+            # Real model class label: "Without Helmet", "With Helmet", "licence"
             box_obj = {
                 "id": f"det-rf-{box_counter}",
-                "label": display_label,
+                "label": raw_label,
                 "classId": class_id,
                 "category": category,
                 "confidence": round(confidence, 4),

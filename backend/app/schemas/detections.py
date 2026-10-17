@@ -53,3 +53,5 @@ class DetectionAnalysisResponse(BaseModel):
     processingTimeMs: float = Field(..., ge=0.0, description="CPU execution and parsing duration in milliseconds")
     imageDimensions: Dict[str, int] = Field(..., description="Optical frame width and height")
     modelInfo: Dict[str, Any] = Field(..., description="Telemetry regarding model architecture and loaded classes")
+    isDeduplicated: bool = Field(default=False, description="True if violation was suppressed due to camera cooldown window")
+    cooldownSecondsRemaining: Optional[int] = Field(default=None, description="Seconds remaining in cooldown window if deduplicated")
