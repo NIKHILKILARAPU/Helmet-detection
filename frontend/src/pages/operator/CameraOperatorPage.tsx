@@ -172,11 +172,20 @@ export const CameraOperatorPage: React.FC = () => {
       setErrorDetails(res.details || []);
 
       if (res.errorCode === 'UNAUTHORIZED') {
+        if (isMonitoringRef.current) {
+          isMonitoringRef.current = false;
+          setIsMonitoring(false);
+          if (timerRef.current) {
+            clearTimeout(timerRef.current);
+            timerRef.current = null;
+          }
+        }
+        setAuthTokenState(null);
         setShowAuthModal(true);
         addToast({
           type: 'warning',
-          title: 'Authentication Required',
-          message: 'Officer Bearer token required to invoke POST /api/v1/detections/analyze.'
+          title: 'Session Expired or Unauthorized',
+          message: res.error || 'Officer Bearer token required or session expired. Please log in again.'
         });
       } else if (res.errorCode === 'MODEL_NOT_AVAILABLE') {
         addToast({
@@ -545,6 +554,18 @@ export const CameraOperatorPage: React.FC = () => {
       return;
     }
 
+    if (!apiClient.getAuthToken()) {
+      setShowAuthModal(true);
+      const msg = 'Staff authentication token required. Please log in with official credentials to capture and analyze frames.';
+      setErrorMessage(msg);
+      addToast({
+        type: 'warning',
+        title: 'Authentication Required',
+        message: msg
+      });
+      return;
+    }
+
     setIsManualCapturing(true);
     setErrorMessage(null);
     setErrorDetails([]);
@@ -577,6 +598,19 @@ export const CameraOperatorPage: React.FC = () => {
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    if (!apiClient.getAuthToken()) {
+      setShowAuthModal(true);
+      const msg = 'Staff authentication token required. Please log in with official credentials to analyze surveillance images.';
+      setErrorMessage(msg);
+      addToast({
+        type: 'warning',
+        title: 'Authentication Required',
+        message: msg
+      });
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
 
     setIsManualCapturing(true);
     setErrorMessage(null);
@@ -636,7 +670,7 @@ export const CameraOperatorPage: React.FC = () => {
       addToast({
         type: 'success',
         title: 'Authenticated',
-        message: 'Staff officer authenticated successfully. Token saved.'
+        message: `Staff officer authenticated successfully (${res.tokenType || 'bearer'}).`
       });
     } else {
       addToast({

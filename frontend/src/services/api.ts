@@ -175,10 +175,13 @@ class ApiClient {
       const json = await res.json().catch(() => null);
 
       if (!res.ok) {
+        if (res.status === 401) {
+          this.setAuthToken(null);
+        }
         return {
           success: false,
-          error: json?.message || `Server returned HTTP ${res.status}`,
-          errorCode: json?.error_code || `HTTP_${res.status}`,
+          error: json?.message || (res.status === 401 ? 'Session expired. Please log in again.' : `Server returned HTTP ${res.status}`),
+          errorCode: json?.error_code || (res.status === 401 ? 'UNAUTHORIZED' : `HTTP_${res.status}`),
           isDemoData: false
         };
       }
@@ -217,10 +220,13 @@ class ApiClient {
       const json = await res.json().catch(() => null);
 
       if (!res.ok) {
+        if (res.status === 401) {
+          this.setAuthToken(null);
+        }
         return {
           success: false,
-          error: json?.message || `Server returned HTTP ${res.status}`,
-          errorCode: json?.error_code || `HTTP_${res.status}`,
+          error: json?.message || (res.status === 401 ? 'Session expired. Please log in again.' : `Server returned HTTP ${res.status}`),
+          errorCode: json?.error_code || (res.status === 401 ? 'UNAUTHORIZED' : `HTTP_${res.status}`),
           isDemoData: false
         };
       }
@@ -259,10 +265,13 @@ class ApiClient {
       const json = await res.json().catch(() => null);
 
       if (!res.ok) {
+        if (res.status === 401) {
+          this.setAuthToken(null);
+        }
         return {
           success: false,
-          error: json?.message || `Server returned HTTP ${res.status}`,
-          errorCode: json?.error_code || `HTTP_${res.status}`,
+          error: json?.message || (res.status === 401 ? 'Session expired. Please log in again.' : `Server returned HTTP ${res.status}`),
+          errorCode: json?.error_code || (res.status === 401 ? 'UNAUTHORIZED' : `HTTP_${res.status}`),
           isDemoData: false
         };
       }
@@ -299,10 +308,13 @@ class ApiClient {
       const json = await res.json().catch(() => null);
 
       if (!res.ok) {
+        if (res.status === 401) {
+          this.setAuthToken(null);
+        }
         return {
           success: false,
-          error: json?.message || `Server returned HTTP ${res.status}`,
-          errorCode: json?.error_code || `HTTP_${res.status}`,
+          error: json?.message || (res.status === 401 ? 'Session expired. Please log in again.' : `Server returned HTTP ${res.status}`),
+          errorCode: json?.error_code || (res.status === 401 ? 'UNAUTHORIZED' : `HTTP_${res.status}`),
           isDemoData: false
         };
       }
@@ -330,10 +342,17 @@ class ApiClient {
   async upload<T>(endpoint: string, formData: FormData): Promise<ApiUploadResult<T>> {
     try {
       const token = this.getAuthToken();
-      const headers: Record<string, string> = {};
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
+      if (!token) {
+        return {
+          success: false,
+          error: 'Staff authentication required. No active JWT session found. Please log in.',
+          errorCode: 'UNAUTHORIZED',
+        };
       }
+
+      const headers: Record<string, string> = {
+        Authorization: `Bearer ${token}`,
+      };
 
       const res = await fetch(`${this.baseUrl}${endpoint}`, {
         method: 'POST',
@@ -344,8 +363,11 @@ class ApiClient {
       const json = await res.json().catch(() => null);
 
       if (!res.ok) {
-        const errorMsg = json?.message || `Server returned HTTP ${res.status} ${res.statusText}`;
-        const errorCode = json?.error_code || `HTTP_${res.status}`;
+        if (res.status === 401) {
+          this.setAuthToken(null);
+        }
+        const errorMsg = json?.message || (res.status === 401 ? 'Authentication session has expired or is invalid. Please log in again.' : `Server returned HTTP ${res.status} ${res.statusText}`);
+        const errorCode = json?.error_code || (res.status === 401 ? 'UNAUTHORIZED' : `HTTP_${res.status}`);
         const details = json?.details || [];
         return {
           success: false,
@@ -376,7 +398,7 @@ class ApiClient {
   /**
    * Authenticates against FastAPI /auth/login and stores JWT token in localStorage.
    */
-  async login(email: string, password: string): Promise<{ success: boolean; token?: string; error?: string }> {
+  async login(email: string, password: string): Promise<{ success: boolean; token?: string; tokenType?: string; error?: string }> {
     try {
       const res = await fetch(`${this.baseUrl}/auth/login`, {
         method: 'POST',
@@ -392,10 +414,11 @@ class ApiClient {
         };
       }
 
-      const token = json?.data?.accessToken;
+      const token = json?.data?.accessToken || json?.data?.access_token;
+      const tokenType = json?.data?.tokenType || 'bearer';
       if (token) {
         this.setAuthToken(token);
-        return { success: true, token };
+        return { success: true, token, tokenType };
       }
       return { success: false, error: 'Token missing in server response.' };
     } catch (err: any) {
