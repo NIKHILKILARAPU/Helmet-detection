@@ -69,6 +69,19 @@ class PlateMatchResult(BaseModel):
     vehicleDetails: Optional[Dict[str, Any]] = Field(None, description="Vehicle make, model, and registration status")
 
 
+class IngestedCaseSummary(BaseModel):
+    """Structured individual candidate violation case created for a distinct unhelmeted rider."""
+    caseId: str = Field(..., description="Unique violation case identifier (e.g. TG-2026-08123)")
+    detectionId: str = Field(..., description="Associated rider detection ID (e.g. rider-1)")
+    violationType: ViolationType = Field(..., description="Violation classification")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Rider-specific violation confidence")
+    cropPath: Optional[str] = Field(None, description="Storage URI to cropped rider evidence image")
+    status: str = Field(default="PENDING_REVIEW", description="Candidate case status")
+    bbox: List[float] = Field(..., description="Bounding box pixel coordinates [x1, y1, x2, y2]")
+    normalized: List[float] = Field(..., description="Normalized coordinates [x1, y1, x2, y2]")
+    isDeduplicated: bool = Field(default=False, description="True if this specific rider case was deduplicated")
+
+
 class DetectionAnalysisResponse(BaseModel):
     detected: bool = Field(..., description="True if one or more objects detected")
     totalDetections: int = Field(..., description="Total bounding boxes found")
@@ -94,7 +107,11 @@ class DetectionAnalysisResponse(BaseModel):
     )
     violationType: Optional[ViolationType] = Field(None, description="Classified violation type if detected")
     violationConfidence: Optional[float] = Field(None, ge=0.0, le=1.0, description="Confidence of the violation")
-    caseId: Optional[str] = Field(None, description="Generated candidate case ID if ingested to reviewer queue")
+    caseId: Optional[str] = Field(None, description="Primary candidate case ID (for backward compatibility)")
+    cases: List[IngestedCaseSummary] = Field(
+        default_factory=list,
+        description="List of independent candidate violation cases created for distinct unhelmeted riders",
+    )
     status: str = Field(
         default="PENDING_REVIEW",
         description="Candidate violation triage status. Never automatically issues fines."
@@ -110,3 +127,4 @@ class DetectionAnalysisResponse(BaseModel):
     modelInfo: Dict[str, Any] = Field(..., description="Telemetry regarding model architecture and loaded classes")
     isDeduplicated: bool = Field(default=False, description="True if violation was suppressed due to camera cooldown window")
     cooldownSecondsRemaining: Optional[int] = Field(default=None, description="Seconds remaining in cooldown window if deduplicated")
+

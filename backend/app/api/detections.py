@@ -37,6 +37,7 @@ from app.schemas.detections import (
     DetectionBoxPercentage,
     RiderDetectionModel,
     PlateMatchResult,
+    IngestedCaseSummary,
 )
 from app.schemas.violations import ViolationType, EvidenceModel
 from app.core.exceptions import (
@@ -138,6 +139,116 @@ def _resolve_camera_oid(db, requested_camera_id: Optional[str]) -> ObjectId:
     return ObjectId("65f000000000000000000001")
 
 
+def compute_iou(box1: List[float], box2: List[float]) -> float:
+    """
+    Computes Intersection over Union (IoU) of two bounding boxes in [x1, y1, x2, y2] format.
+    Works for both pixel and normalized coordinates.
+    """
+    x1 = max(box1[0], box2[0])
+    y1 = max(box1[1], box2[1])
+    x2 = min(box1[2], box2[2])
+    y2 = min(box1[3], box2[3])
+
+    inter_w = max(0.0, x2 - x1)
+    inter_h = max(0.0, y2 - y1)
+    inter_area = inter_w * inter_h
+
+    area1 = max(0.0, box1[2] - box1[0]) * max(0.0, box1[3] - box1[1])
+    area2 = max(0.0, box2[2] - box2[0]) * max(0.0, box2[3] - box2[1])
+
+    union_area = area1 + area2 - inter_area
+    if union_area <= 0.0:
+        return 0.0
+    return inter_area / union_area
+
+
+def apply_nms(boxes: List[Dict[str, Any]], iou_threshold: float = 0.45) -> List[Dict[str, Any]]:
+    """
+    Performs category-aware Non-Maximum Suppression.
+    Prunes duplicate overlapping predictions on the exact same rider or object
+    while strictly preserving distinct riders and objects.
+    """
+    if not boxes:
+        return []
+
+    by_category: Dict[str, List[Dict[str, Any]]] = {}
+    for b in boxes:
+        cat = b.get("category") or b.get("label") or "UNKNOWN"
+        by_category.setdefault(cat, []).append(b)
+
+    kept: List[Dict[str, Any]] = []
+    for cat, cat_boxes in by_category.items():
+        sorted_boxes = sorted(cat_boxes, key=lambda x: x.get("confidence", 0.0), reverse=True)
+        cat_kept: List[Dict[str, Any]] = []
+        for b in sorted_boxes:
+            b_coords = b.get("xyxy") or [0, 0, 0, 0]
+            overlap = False
+            for k in cat_kept:
+                k_coords = k.get("xyxy") or [0, 0, 0, 0]
+                if compute_iou(b_coords, k_coords) > iou_threshold:
+                    overlap = True
+                    break
+            if not overlap:
+                cat_kept.append(b)
+        kept.extend(cat_kept)
+
+    return sorted(kept, key=lambda x: x.get("confidence", 0.0), reverse=True)
+
+
+def is_same_tracked_rider(
+    rider_norm_box: List[float],
+    recent_case_doc: Dict[str, Any],
+    iou_thresh: float = 0.35,
+    centroid_dist_thresh: float = 0.20,
+) -> bool:
+    """
+    Determines if a detected rider in the current frame represents the same incident
+    as an existing candidate case captured within the cooldown window on the same camera.
+    """
+    recent_rider = recent_case_doc.get("riderDetails") or {}
+    recent_norm = recent_rider.get("normalized")
+    if not recent_norm:
+        boxes = recent_case_doc.get("boundingBoxes") or []
+        for bb in boxes:
+            coords = bb.get("coordinates")
+            if isinstance(coords, dict):
+                recent_norm = [
+                    coords.get("x1", coords.get("xmin", 0.0)),
+                    coords.get("y1", coords.get("ymin", 0.0)),
+                    coords.get("x2", coords.get("xmax", 0.0)),
+                    coords.get("y2", coords.get("ymax", 0.0)),
+                ]
+                break
+            elif isinstance(coords, (list, tuple)) and len(coords) >= 4:
+                recent_norm = list(coords[:4])
+                break
+
+    if not recent_norm or len(recent_norm) < 4:
+        return False
+
+    # Direct IoU on normalized coordinates
+    if compute_iou(rider_norm_box, recent_norm) >= iou_thresh:
+        return True
+
+    # Centroid displacement check
+    cx1 = (rider_norm_box[0] + rider_norm_box[2]) / 2.0
+    cy1 = (rider_norm_box[1] + rider_norm_box[3]) / 2.0
+    cx2 = (recent_norm[0] + recent_norm[2]) / 2.0
+    cy2 = (recent_norm[1] + recent_norm[3]) / 2.0
+
+    dx = abs(cx1 - cx2)
+    dy = abs(cy1 - cy2)
+
+    area1 = max(0.0001, (rider_norm_box[2] - rider_norm_box[0]) * (rider_norm_box[3] - rider_norm_box[1]))
+    area2 = max(0.0001, (recent_norm[2] - recent_norm[0]) * (recent_norm[3] - recent_norm[1]))
+    area_ratio = area1 / area2
+
+    if dx <= centroid_dist_thresh and dy <= centroid_dist_thresh and 0.4 <= area_ratio <= 2.5:
+        return True
+
+    return False
+
+
 @router.post(
     "/analyze",
     response_model=ApiResponse[DetectionAnalysisResponse],
@@ -228,6 +339,11 @@ async def analyze_frame(
         active_model_info = yolo_engine.get_model_info()
     model_inference_ms = round((time.perf_counter() - t_inf_start) * 1000, 2)
 
+    # Apply category-aware Non-Maximum Suppression to deduplicate overlapping boxes
+    det_result["boxes"] = apply_nms(det_result.get("boxes", []), iou_threshold=0.45)
+    det_result["totalDetections"] = len(det_result["boxes"])
+    det_result["detected"] = len(det_result["boxes"]) > 0
+
     # 6. Persist full evidence frame to disk
     t_ev_start = time.perf_counter()
     file_hash = hashlib.sha256(contents).hexdigest()
@@ -250,6 +366,7 @@ async def analyze_frame(
         if b.get("category") in ("HELMET_VIOLATION", "HELMET_COMPLIANT", "PERSON")
         or str(b.get("label", "")).lower() in ("without helmet", "with helmet", "no_helmet", "helmet", "rider", "person")
     ]
+    has_person_or_rider = len(rider_box_candidates) > 0
 
     for idx, rb in enumerate(rider_box_candidates):
         stable_id = f"rider-{idx + 1}-{file_hash[:8]}"
@@ -267,7 +384,7 @@ async def analyze_frame(
             classification = "UNKNOWN"
             is_viol = False
 
-        # Safe pixel crop bounded within image dimensions (matches displayed coordinates)
+        # Safe pixel crop bounded within image dimensions
         coords = rb.get("xyxy", [0, 0, 0, 0])
         rx1 = max(0, min(width - 1, int(round(coords[0]))))
         ry1 = max(0, min(height - 1, int(round(coords[1]))))
@@ -303,6 +420,9 @@ async def analyze_frame(
                 isViolation=is_viol,
             )
         )
+
+    # Filter distinct unhelmeted riders requiring review
+    violating_riders = [r for r in riders_response if r.isViolation and r.classification == "WITHOUT_HELMET"]
 
     # 8. Extract license plate & match against registry
     plate_boxes = [
@@ -354,14 +474,25 @@ async def analyze_frame(
 
     evidence_saving_ms = round((time.perf_counter() - t_ev_start - (ocr_ms / 1000.0 if ocr_ms else 0.0)) * 1000, 2)
 
+    # 9. Violation determination & Plate Fallback Logic
+    # REQUIREMENT 2:
+    # A. If people/riders exist: process them. Create cases ONLY for distinct riders without helmet.
+    #    Never create a separate plate case. If people exist but none without helmet, do NOT create plate-only case.
+    # B. If no people/riders exist: use plate/OCR fallback for manual review. Never infer no-helmet violation from plate alone.
+    #    If neither person nor plate detected, return valid no-detection response.
+    is_candidate_violation = (len(violating_riders) > 0) and det_result.get("helmetClassificationAvailable", True)
+    violation_type = ViolationType.NO_HELMET_RIDER if is_candidate_violation else None
+    violation_confidence = max((r.confidence for r in violating_riders), default=None) if is_candidate_violation else None
+
     now = datetime.now(timezone.utc)
     model_run_id: Optional[str] = None
-    case_id: Optional[str] = None
+    primary_case_id: Optional[str] = None
+    cases_summary: List[IngestedCaseSummary] = []
+    new_inserted_case_ids: List[str] = []
     is_deduplicated = False
     cooldown_remaining: Optional[int] = None
     plate_match_res: Optional[PlateMatchResult] = None
 
-    # 9. MongoDB persistence and violation deduplication
     t_db_start = time.perf_counter()
     try:
         # Match plate in database
@@ -397,119 +528,221 @@ async def analyze_frame(
                 vehicleDetails=None,
             )
 
-        # If candidate violation detected and auto_ingest enabled, check cooldown before creating draft
-        if det_result["isCandidateViolation"] and auto_ingest and det_result["violationType"]:
+        # 10. Individual Case Ingestion & Deduplication
+        if is_candidate_violation and auto_ingest:
+            # A. Idempotency Check: if identical image hash was recently processed on this camera within cooldown
+            existing_file_cases = []
             if cooldown_seconds > 0:
                 cooldown_cutoff = now - timedelta(seconds=cooldown_seconds)
-                recent_violation = db[COLLECTION_VIOLATIONS].find_one(
-                    {
+                existing_file_cases = list(
+                    db[COLLECTION_VIOLATIONS].find({
                         "cameraId": camera_oid,
+                        "evidence.fileHash": file_hash,
                         "createdAt": {"$gte": cooldown_cutoff},
-                        "status": "PENDING_REVIEW",
-                    },
-                    sort=[("createdAt", -1)],
+                    }).sort("createdAt", -1)
                 )
-                if recent_violation:
-                    is_deduplicated = True
-                    case_id = recent_violation.get("caseId")
-                    created_at = recent_violation.get("createdAt")
-                    if created_at:
-                        if created_at.tzinfo is None:
-                            created_at = created_at.replace(tzinfo=timezone.utc)
-                        elapsed = (now - created_at).total_seconds()
-                        cooldown_remaining = max(0, int(cooldown_seconds - elapsed))
 
-            if not is_deduplicated:
-                case_id = f"TG-2026-{abs(hash(str(camera_oid) + str(now.timestamp()))) % 100000:05d}"
-                
-                # Map bounding boxes to schema requirements with consistent normalized coordinates [x1, y1, x2, y2]
-                schema_boxes = [
-                    {
-                        "className": b["label"],
-                        "confidence": b["confidence"],
-                        "coordinates": {
-                            "x1": b["normalized"][0],
-                            "y1": b["normalized"][1],
-                            "x2": b["normalized"][2],
-                            "y2": b["normalized"][3],
-                            "xmin": b["normalized"][0],
-                            "ymin": b["normalized"][1],
-                            "xmax": b["normalized"][2],
-                            "ymax": b["normalized"][3],
-                        },
-                    }
-                    for b in det_result["boxes"]
-                ]
+            if existing_file_cases and cooldown_seconds > 0:
+                created_at = existing_file_cases[0].get("createdAt")
+                if created_at:
+                    if created_at.tzinfo is None:
+                        created_at = created_at.replace(tzinfo=timezone.utc)
+                    elapsed = (now - created_at).total_seconds()
+                    cooldown_remaining = max(1, int(cooldown_seconds - elapsed))
 
-                evidence_obj = {
-                    "storagePath": relative_storage_path,
-                    "fileHash": file_hash,
-                    "mimeType": content_type or "image/jpeg",
-                    "width": width,
-                    "height": height,
-                    "fileSizeBytes": file_size,
-                }
+                for ec in existing_file_cases:
+                    rider_det = ec.get("riderDetails") or {}
+                    coords = ec.get("boundingBoxes", [{}])[0].get("coordinates", {})
+                    norm = [
+                        coords.get("x1", coords.get("xmin", 0.0)),
+                        coords.get("y1", coords.get("ymin", 0.0)),
+                        coords.get("x2", coords.get("xmax", 0.0)),
+                        coords.get("y2", coords.get("ymax", 0.0)),
+                    ] if isinstance(coords, dict) else [0.0, 0.0, 0.0, 0.0]
+                    cases_summary.append(
+                        IngestedCaseSummary(
+                            caseId=ec["caseId"],
+                            detectionId=rider_det.get("detectionId") or f"rider-{len(cases_summary) + 1}",
+                            violationType=ec.get("violationType", ViolationType.NO_HELMET_RIDER),
+                            confidence=ec.get("confidence", 0.9),
+                            cropPath=ec.get("evidence", {}).get("riderCropPath"),
+                            status=ec.get("status", "PENDING_REVIEW"),
+                            bbox=rider_det.get("bbox", [0.0, 0.0, 0.0, 0.0]),
+                            normalized=rider_det.get("normalized", norm),
+                            isDeduplicated=True,
+                        )
+                    )
+                is_deduplicated = True
+                primary_case_id = existing_file_cases[0]["caseId"]
+            else:
+                # B. Tracking across successive frames / cooldown window
+                recent_cases = []
+                if cooldown_seconds > 0:
+                    cooldown_cutoff = now - timedelta(seconds=cooldown_seconds)
+                    recent_cases = list(
+                        db[COLLECTION_VIOLATIONS].find(
+                            {
+                                "cameraId": camera_oid,
+                                "createdAt": {"$gte": cooldown_cutoff},
+                                "status": "PENDING_REVIEW",
+                            }
+                        ).sort("createdAt", -1)
+                    )
 
-                # Link matched vehicle and registered owner (strictly registered owner, never assumed rider)
-                person_oid = None
-                if plate_match_res and plate_match_res.matchedPersonId and ObjectId.is_valid(plate_match_res.matchedPersonId):
-                    person_oid = ObjectId(plate_match_res.matchedPersonId)
+                # Process each distinct unhelmeted rider into an independent review case
+                for r_idx, r in enumerate(violating_riders):
+                    matched_recent = None
+                    if recent_cases:
+                        for rc in recent_cases:
+                            # 1. Plate match link
+                            rc_plate = rc.get("plateMatch", {}).get("normalizedPlate")
+                            if rc_plate and plate_match_res and plate_match_res.normalizedPlate and rc_plate == plate_match_res.normalizedPlate:
+                                matched_recent = rc
+                                break
+                            # 2. Spatial bounding box tracking
+                            if is_same_tracked_rider(r.normalized, rc):
+                                matched_recent = rc
+                                break
 
-                vehicle_oid = None
-                if plate_match_res and plate_match_res.matchedVehicleId and ObjectId.is_valid(plate_match_res.matchedVehicleId):
-                    vehicle_oid = ObjectId(plate_match_res.matchedVehicleId)
+                    if matched_recent:
+                        # Existing tracked incident within cooldown
+                        ec_case_id = matched_recent["caseId"]
+                        cases_summary.append(
+                            IngestedCaseSummary(
+                                caseId=ec_case_id,
+                                detectionId=r.detectionId,
+                                violationType=ViolationType.NO_HELMET_RIDER,
+                                confidence=r.confidence,
+                                cropPath=r.cropPath,
+                                status="PENDING_REVIEW",
+                                bbox=r.bbox,
+                                normalized=r.normalized,
+                                isDeduplicated=True,
+                            )
+                        )
+                        created_at = matched_recent.get("createdAt")
+                        if created_at:
+                            if created_at.tzinfo is None:
+                                created_at = created_at.replace(tzinfo=timezone.utc)
+                            elapsed = (now - created_at).total_seconds()
+                            cooldown_remaining = max(cooldown_remaining or 0, int(cooldown_seconds - elapsed))
+                    else:
+                        # New independent case for this distinct rider!
+                        case_id = f"TG-2026-{abs(hash(str(camera_oid) + str(file_hash) + str(r.detectionId) + str(now.timestamp()))) % 100000:05d}"
+                        
+                        rider_schema_box = {
+                            "className": r.label,
+                            "confidence": r.confidence,
+                            "coordinates": {
+                                "x1": r.normalized[0],
+                                "y1": r.normalized[1],
+                                "x2": r.normalized[2],
+                                "y2": r.normalized[3],
+                                "xmin": r.normalized[0],
+                                "ymin": r.normalized[1],
+                                "xmax": r.normalized[2],
+                                "ymax": r.normalized[3],
+                            },
+                        }
 
-                verification_status = plate_match_res.matchStatus if plate_match_res else "UNVERIFIED"
+                        evidence_obj = {
+                            "storagePath": relative_storage_path,
+                            "fileHash": file_hash,
+                            "mimeType": content_type or "image/jpeg",
+                            "width": width,
+                            "height": height,
+                            "fileSizeBytes": file_size,
+                            "riderCropPath": r.cropPath,
+                        }
 
-                violation_doc = {
-                    "caseId": case_id,
-                    "cameraId": camera_oid,
-                    "capturedAt": now,
-                    "violationType": det_result["violationType"],
-                    "confidence": det_result["violationConfidence"],
-                    "status": "PENDING_REVIEW",  # Strictly pending review; never automatically fine
-                    "evidence": evidence_obj,
-                    "evidenceQuality": "HIGH",
-                    "boundingBoxes": schema_boxes,
-                    "identityVerificationStatus": verification_status,
-                    "personId": person_oid,
-                    "vehicleId": vehicle_oid,
-                    "reviewerNotes": None,
-                    "rejectionReason": None,
-                    "challanDraftNumber": None,
-                    "draftAmountInr": None,
-                    "reviewedBy": None,
-                    "reviewedAt": None,
-                    "createdAt": now,
-                    "updatedAt": now,
-                }
-                db[COLLECTION_VIOLATIONS].insert_one(violation_doc)
+                        person_oid = None
+                        if plate_match_res and plate_match_res.matchedPersonId and ObjectId.is_valid(plate_match_res.matchedPersonId):
+                            person_oid = ObjectId(plate_match_res.matchedPersonId)
 
-                # Record append-only audit trail
-                audit_entry = {
-                    "timestamp": now,
-                    "actorUserId": ObjectId(current_user["id"]) if ObjectId.is_valid(current_user["id"]) else None,
-                    "actorNameSnapshot": current_user["name"],
-                    "actorRoleSnapshot": current_user["role"],
-                    "action": "AI_CANDIDATE_INGESTED",
-                    "entityType": "violation",
-                    "entityId": case_id,
-                    "notes": f"Automated AI detection candidate logged: {det_result['violationType']}.",
-                    "metadata": {
-                        "confidence": det_result["violationConfidence"],
-                        "sourceLabel": clean_source_label,
-                        "cameraId": str(camera_oid),
-                        "modelRunId": None,
-                        "identityVerificationStatus": verification_status,
-                        "matchedVehicleId": str(vehicle_oid) if vehicle_oid else None,
-                        "matchedPersonId": str(person_oid) if person_oid else None,
-                    },
-                    "requestId": None,
-                }
-                try:
-                    db[COLLECTION_AUDIT_LOGS].insert_one(audit_entry)
-                except Exception:
-                    pass
+                        vehicle_oid = None
+                        if plate_match_res and plate_match_res.matchedVehicleId and ObjectId.is_valid(plate_match_res.matchedVehicleId):
+                            vehicle_oid = ObjectId(plate_match_res.matchedVehicleId)
+
+                        verification_status = plate_match_res.matchStatus if plate_match_res else "UNVERIFIED"
+
+                        violation_doc = {
+                            "caseId": case_id,
+                            "cameraId": camera_oid,
+                            "capturedAt": now,
+                            "violationType": ViolationType.NO_HELMET_RIDER.value,
+                            "confidence": r.confidence,
+                            "status": "PENDING_REVIEW",  # Strictly pending review; never automatically fine
+                            "evidence": evidence_obj,
+                            "evidenceQuality": "HIGH",
+                            "boundingBoxes": [rider_schema_box],
+                            "riderDetails": {
+                                "detectionId": r.detectionId,
+                                "classification": r.classification,
+                                "confidence": r.confidence,
+                                "bbox": r.bbox,
+                                "normalized": r.normalized,
+                                "cropPath": r.cropPath,
+                            },
+                            "modelRunId": None,
+                            "identityVerificationStatus": verification_status,
+                            "personId": person_oid,
+                            "vehicleId": vehicle_oid,
+                            "plateMatch": plate_match_res.model_dump() if plate_match_res else None,
+                            "reviewerNotes": None,
+                            "rejectionReason": None,
+                            "challanDraftNumber": None,
+                            "draftAmountInr": None,
+                            "reviewedBy": None,
+                            "reviewedAt": None,
+                            "createdAt": now,
+                            "updatedAt": now,
+                        }
+                        db[COLLECTION_VIOLATIONS].insert_one(violation_doc)
+                        new_inserted_case_ids.append(case_id)
+
+                        # Record append-only audit trail per independent case
+                        audit_entry = {
+                            "timestamp": now,
+                            "actorUserId": ObjectId(current_user["id"]) if ObjectId.is_valid(current_user["id"]) else None,
+                            "actorNameSnapshot": current_user["name"],
+                            "actorRoleSnapshot": current_user["role"],
+                            "action": "AI_CANDIDATE_INGESTED",
+                            "entityType": "violation",
+                            "entityId": case_id,
+                            "notes": f"Automated individual candidate logged for rider {r.detectionId} ({r.label}, {r.confidence:.2f}).",
+                            "metadata": {
+                                "confidence": r.confidence,
+                                "sourceLabel": clean_source_label,
+                                "cameraId": str(camera_oid),
+                                "riderDetectionId": r.detectionId,
+                                "identityVerificationStatus": verification_status,
+                                "matchedVehicleId": str(vehicle_oid) if vehicle_oid else None,
+                                "matchedPersonId": str(person_oid) if person_oid else None,
+                            },
+                            "requestId": None,
+                        }
+                        try:
+                            db[COLLECTION_AUDIT_LOGS].insert_one(audit_entry)
+                        except Exception:
+                            pass
+
+                        cases_summary.append(
+                            IngestedCaseSummary(
+                                caseId=case_id,
+                                detectionId=r.detectionId,
+                                violationType=ViolationType.NO_HELMET_RIDER,
+                                confidence=r.confidence,
+                                cropPath=r.cropPath,
+                                status="PENDING_REVIEW",
+                                bbox=r.bbox,
+                                normalized=r.normalized,
+                                isDeduplicated=False,
+                            )
+                        )
+
+                if cases_summary:
+                    is_deduplicated = all(c.isDeduplicated for c in cases_summary)
+                    primary_case_id = cases_summary[0].caseId
 
         # Compute preliminary total processing time before model_runs insert
         db_lookup_ms = round((time.perf_counter() - t_db_start) * 1000, 2)
@@ -533,11 +766,13 @@ async def analyze_frame(
             "timingBreakdown": timing_breakdown,
             "resultSummary": {
                 "totalDetections": det_result["totalDetections"],
-                "vehiclesCount": len(det_result["vehicles"]),
-                "personsCount": len(det_result["persons"]),
+                "vehiclesCount": len([b for b in det_result["boxes"] if b.get("category") == "VEHICLE"]),
+                "personsCount": len(rider_box_candidates),
                 "ridersCount": len(riders_response),
-                "isCandidateViolation": det_result["isCandidateViolation"],
-                "violationType": det_result["violationType"],
+                "casesCount": len(cases_summary),
+                "newCasesCount": len(new_inserted_case_ids),
+                "isCandidateViolation": is_candidate_violation,
+                "violationType": violation_type,
                 "isDeduplicated": is_deduplicated,
                 "cooldownRemaining": cooldown_remaining,
                 "plateMatchStatus": plate_match_res.matchStatus if plate_match_res else "MANUAL_REQUIRED",
@@ -547,6 +782,16 @@ async def analyze_frame(
         }
         run_res = db[COLLECTION_MODEL_RUNS].insert_one(model_run_doc)
         model_run_id = str(run_res.inserted_id)
+
+        # Link modelRunId to newly inserted violation cases
+        if new_inserted_case_ids and model_run_id:
+            try:
+                db[COLLECTION_VIOLATIONS].update_many(
+                    {"caseId": {"$in": new_inserted_case_ids}},
+                    {"$set": {"modelRunId": ObjectId(model_run_id)}},
+                )
+            except Exception:
+                pass
 
     except (ValidationError, NotFoundError):
         raise
@@ -576,6 +821,9 @@ async def analyze_frame(
                 ownerNameSnapshot=None,
                 vehicleDetails=None,
             )
+
+    # Determine overall status
+    overall_status = "PENDING_REVIEW" if is_candidate_violation else "NO_VIOLATION"
 
     # Construct response DTO
     evidence_model = EvidenceModel(
@@ -607,7 +855,6 @@ async def analyze_frame(
         for b in det_result["boxes"]
     ]
 
-    # Explicit separation: vehicles list strictly contains VEHICLE objects, never LICENSE_PLATE
     vehicles_response = [b for b in boxes_response if b.category == "VEHICLE"]
     persons_response = [b for b in boxes_response if b.category == "PERSON"]
 
@@ -624,11 +871,12 @@ async def analyze_frame(
         plateMatch=plate_match_res,
         helmetClassificationAvailable=det_result["helmetClassificationAvailable"],
         helmetClassificationMessage=det_result["helmetClassificationMessage"],
-        isCandidateViolation=det_result["isCandidateViolation"],
-        violationType=det_result["violationType"],
-        violationConfidence=det_result["violationConfidence"],
-        caseId=case_id,
-        status="PENDING_REVIEW" if det_result["isCandidateViolation"] else "NO_VIOLATION",
+        isCandidateViolation=is_candidate_violation,
+        violationType=violation_type,
+        violationConfidence=violation_confidence,
+        caseId=primary_case_id,
+        cases=cases_summary,
+        status=overall_status,
         evidence=evidence_model,
         modelRunId=model_run_id,
         processingTimeMs=total_processing_ms,
@@ -645,7 +893,7 @@ async def analyze_frame(
         message=(
             f"Frame analyzed successfully in {total_processing_ms}ms "
             f"(inference: {model_inference_ms}ms). "
-            f"Found {det_result['totalDetections']} object(s), {len(riders_response)} rider(s)."
+            f"Found {det_result['totalDetections']} object(s), {len(riders_response)} rider(s), {len(cases_summary)} case(s)."
         ),
     )
 

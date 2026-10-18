@@ -169,18 +169,27 @@ export const ReviewerQueuePage: React.FC = () => {
                     }`}
                   >
                     <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono font-bold text-xs text-slate-900">{item.id}</span>
-                          <StatusBadge status={item.status} size="sm" />
-                        </div>
-                        <div className="text-[11px] text-slate-500 mt-1 flex items-center gap-1.5">
-                          <Clock className="w-3 h-3 text-slate-400" />
-                          <span>{item.timestamp}</span>
+                      <div className="flex items-center gap-2.5">
+                        {item.riderCropUrl ? (
+                          <img
+                            src={item.riderCropUrl}
+                            alt={`Rider crop ${item.id}`}
+                            className="w-10 h-10 rounded-md object-cover border border-rose-200 bg-slate-900 shrink-0"
+                          />
+                        ) : null}
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono font-bold text-xs text-slate-900">{item.id}</span>
+                            <StatusBadge status={item.status} size="sm" />
+                          </div>
+                          <div className="text-[11px] text-slate-500 mt-1 flex items-center gap-1.5">
+                            <Clock className="w-3 h-3 text-slate-400" />
+                            <span>{item.timestamp}</span>
+                          </div>
                         </div>
                       </div>
 
-                      <div className="text-right">
+                      <div className="text-right shrink-0">
                         <span className={`text-xs font-bold ${item.confidence >= 0.9 ? 'text-emerald-700' : 'text-amber-700'}`}>
                           {(item.confidence * 100).toFixed(0)}% Conf.
                         </span>

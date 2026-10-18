@@ -18,6 +18,9 @@ export function mapBackendViolationToCase(doc: any): ViolationCase {
   const rawEvidencePath = doc.evidence?.storagePath || doc.evidence?.imageUrl || doc.evidenceImageUrl || '';
   const evidenceImageUrl = getMediaUrl(rawEvidencePath);
 
+  const rawRiderCropPath = doc.evidence?.riderCropPath || doc.riderDetails?.cropPath || '';
+  const riderCropUrl = rawRiderCropPath ? getMediaUrl(rawRiderCropPath) : null;
+
   const camera = typeof doc.camera === 'object' && doc.camera !== null ? {
     id: doc.camera.id || String(doc.cameraId || 'CAM-01'),
     name: doc.camera.name || doc.cameraName || 'Traffic Station',
@@ -69,7 +72,9 @@ export function mapBackendViolationToCase(doc: any): ViolationCase {
     draftAmountInr: doc.draftAmountInr,
     rejectionReason: doc.rejectionReason,
     riders: doc.riders,
-    plateMatch: doc.plateMatch
+    plateMatch: doc.plateMatch,
+    riderCropUrl,
+    riderDetails: doc.riderDetails || null
   };
 }
 

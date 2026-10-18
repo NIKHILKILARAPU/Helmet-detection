@@ -68,6 +68,15 @@ export interface ViolationCase {
   rejectionReason?: string;
   riders?: RiderDetection[];
   plateMatch?: PlateMatchResult | null;
+  riderCropUrl?: string | null;
+  riderDetails?: {
+    detectionId?: string;
+    classification?: string;
+    confidence?: number;
+    bbox?: [number, number, number, number];
+    normalized?: [number, number, number, number];
+    cropPath?: string | null;
+  } | null;
 }
 
 export interface LinkedVehicle {
@@ -254,6 +263,18 @@ export interface PlateMatchResult {
   vehicleDetails?: Record<string, any> | null;
 }
 
+export interface IngestedCaseSummary {
+  caseId: string;
+  detectionId: string;
+  violationType: ViolationType;
+  confidence: number;
+  cropPath?: string | null;
+  status: string;
+  bbox: [number, number, number, number];
+  normalized: [number, number, number, number];
+  isDeduplicated: boolean;
+}
+
 export interface DetectionAnalysisResult {
   detected: boolean;
   totalDetections: number;
@@ -268,6 +289,7 @@ export interface DetectionAnalysisResult {
   violationType?: ViolationType | null;
   violationConfidence?: number | null;
   caseId?: string | null;
+  cases?: IngestedCaseSummary[];
   status: string;
   evidence?: {
     storagePath: string;

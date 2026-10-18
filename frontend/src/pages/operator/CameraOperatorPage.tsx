@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context';
 import { cameraService } from '../../services/cameraService';
-import { apiClient } from '../../services/api';
+import { apiClient, getMediaUrl } from '../../services/api';
 import type { CameraDevice } from '../../services/cameraService';
 import type { BoundingBox, ViolationCase, DetectionAnalysisResult, RiderDetection, PlateMatchResult } from '../../types';
 import { EvidenceCropImage } from '../../components/common/EvidenceCropImage';
@@ -243,37 +243,84 @@ export const CameraOperatorPage: React.FC = () => {
 
     // If candidate violation AND NOT deduplicated, ingest to reviewer queue
     if (det.isCandidateViolation && det.caseId && !det.isDeduplicated) {
-      const candidateCase: ViolationCase = {
-        id: det.caseId,
-        timestamp: nowIso,
-        camera: {
-          id: selectedDeviceId || 'CAM-OPERATOR-WEBCAM',
-          name: sourceLabel,
-          location: 'Operator Workspace Live Camera',
-          type: selectedSourceType
-        },
-        violationType: det.violationType || 'NO_HELMET_RIDER',
-        confidence: det.violationConfidence || 0.85,
-        status: 'PENDING_REVIEW',
-        evidenceImageUrl: snapshotUrl,
-        evidenceQuality: 'HIGH',
-        boundingBoxes: uiBoxes,
-        linkedPerson: undefined,
-        reviewerNotes: '',
-        reviewHistory: [
-          {
-            id: `audit-${Date.now()}`,
-            timestamp: nowIso,
-            actor: currentUser?.name || 'Camera Operator',
-            role: 'operator',
-            action: 'CREATED',
-            notes: `Candidate frame analyzed via Roboflow Hosted Inference. Detected: ${det.violationType}. Queued with status PENDING_REVIEW.`
+      if (det.cases && det.cases.length > 0) {
+        det.cases.forEach((sc) => {
+          if (!sc.isDeduplicated) {
+            const candidateCase: ViolationCase = {
+              id: sc.caseId,
+              timestamp: nowIso,
+              camera: {
+                id: selectedDeviceId || 'CAM-OPERATOR-WEBCAM',
+                name: sourceLabel,
+                location: 'Operator Workspace Live Camera',
+                type: selectedSourceType
+              },
+              violationType: sc.violationType || det.violationType || 'NO_HELMET_RIDER',
+              confidence: sc.confidence || det.violationConfidence || 0.85,
+              status: 'PENDING_REVIEW',
+              evidenceImageUrl: snapshotUrl,
+              evidenceQuality: 'HIGH',
+              boundingBoxes: uiBoxes,
+              linkedPerson: undefined,
+              reviewerNotes: '',
+              reviewHistory: [
+                {
+                  id: `audit-${Date.now()}-${sc.caseId}`,
+                  timestamp: nowIso,
+                  actor: currentUser?.name || 'Camera Operator',
+                  role: 'operator',
+                  action: 'CREATED',
+                  notes: `Candidate rider ${sc.detectionId} analyzed via Roboflow Hosted Inference. Queued with status PENDING_REVIEW.`
+                }
+              ],
+              riders: det.riders,
+              plateMatch: det.plateMatch,
+              riderCropUrl: sc.cropPath ? getMediaUrl(sc.cropPath) : null,
+              riderDetails: {
+                detectionId: sc.detectionId,
+                classification: 'WITHOUT_HELMET',
+                confidence: sc.confidence,
+                bbox: sc.bbox,
+                normalized: sc.normalized,
+                cropPath: sc.cropPath
+              }
+            };
+            addNewCapturedCase(candidateCase);
           }
-        ],
-        riders: det.riders,
-        plateMatch: det.plateMatch
-      };
-      addNewCapturedCase(candidateCase);
+        });
+      } else {
+        const candidateCase: ViolationCase = {
+          id: det.caseId,
+          timestamp: nowIso,
+          camera: {
+            id: selectedDeviceId || 'CAM-OPERATOR-WEBCAM',
+            name: sourceLabel,
+            location: 'Operator Workspace Live Camera',
+            type: selectedSourceType
+          },
+          violationType: det.violationType || 'NO_HELMET_RIDER',
+          confidence: det.violationConfidence || 0.85,
+          status: 'PENDING_REVIEW',
+          evidenceImageUrl: snapshotUrl,
+          evidenceQuality: 'HIGH',
+          boundingBoxes: uiBoxes,
+          linkedPerson: undefined,
+          reviewerNotes: '',
+          reviewHistory: [
+            {
+              id: `audit-${Date.now()}`,
+              timestamp: nowIso,
+              actor: currentUser?.name || 'Camera Operator',
+              role: 'operator',
+              action: 'CREATED',
+              notes: `Candidate frame analyzed via Roboflow Hosted Inference. Detected: ${det.violationType}. Queued with status PENDING_REVIEW.`
+            }
+          ],
+          riders: det.riders,
+          plateMatch: det.plateMatch
+        };
+        addNewCapturedCase(candidateCase);
+      }
     }
 
     setRecentCaptures(prev => [

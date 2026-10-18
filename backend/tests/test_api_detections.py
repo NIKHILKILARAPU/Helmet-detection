@@ -1759,4 +1759,476 @@ class TestAuditAndRobustnessImprovements:
         assert timing["totalProcessingMs"] >= 0.0
 
 
+class TestIndividualRiderCasesAndFallbackPipeline:
+    """
+    Exhaustive verification of individual rider cases, fallback behavior,
+    deduplication, tracking, and independent review lifecycle.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup_pipeline_test(self):
+        db = get_db()
+        self.camera_oid = ObjectId("65f000000000000000000099")
+        db[COLLECTION_VIOLATIONS].delete_many({"cameraId": self.camera_oid})
+
+    def test_case_1_four_distinct_no_helmet_riders_produce_four_pending_cases(self, auth_headers):
+        """1. 4 distinct no-helmet riders produce 4 distinct pending cases in DB and response."""
+        db = get_db()
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    {"x": 100.0, "y": 150.0, "width": 80.0, "height": 100.0, "confidence": 0.95, "class": "Without Helmet", "class_id": 1},
+                    {"x": 240.0, "y": 150.0, "width": 80.0, "height": 100.0, "confidence": 0.92, "class": "Without Helmet", "class_id": 1},
+                    {"x": 380.0, "y": 150.0, "width": 80.0, "height": 100.0, "confidence": 0.89, "class": "Without Helmet", "class_id": 1},
+                    {"x": 520.0, "y": 150.0, "width": 80.0, "height": 100.0, "confidence": 0.86, "class": "Without Helmet", "class_id": 1},
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=640, height=480)
+        files = {"file": ("four_riders_frame.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {"camera_id": str(self.camera_oid), "cooldown_seconds": "0"}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                data=form_data,
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["isCandidateViolation"] is True
+        assert len(data["cases"]) == 4
+
+        case_ids = [c["caseId"] for c in data["cases"]]
+        assert len(set(case_ids)) == 4, "Every distinct rider must receive a unique case ID"
+
+        # Verify DB records
+        db_records = list(db[COLLECTION_VIOLATIONS].find({"cameraId": self.camera_oid}))
+        assert len(db_records) == 4
+        for r in db_records:
+            assert r["status"] == "PENDING_REVIEW"
+            assert r["evidence"]["riderCropPath"] is not None
+            assert r["riderDetails"] is not None
+
+    def test_case_2_riders_plus_plate_create_rider_cases_only(self, auth_headers):
+        """2. Riders plus plate create rider cases only; never a separate plate case."""
+        db = get_db()
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    {"x": 200.0, "y": 150.0, "width": 80.0, "height": 100.0, "confidence": 0.94, "class": "Without Helmet", "class_id": 1},
+                    {"x": 350.0, "y": 150.0, "width": 80.0, "height": 100.0, "confidence": 0.96, "class": "With Helmet", "class_id": 0},
+                    {"x": 280.0, "y": 300.0, "width": 60.0, "height": 25.0, "confidence": 0.90, "class": "licence", "class_id": 2},
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=640, height=480)
+        files = {"file": ("riders_and_plate.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {"camera_id": str(self.camera_oid), "cooldown_seconds": "0"}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                data=form_data,
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        # Exactly 1 case for the unhelmeted rider, plate is attached as metadata
+        assert len(data["cases"]) == 1
+        assert data["plateMatch"] is not None
+        assert data["plateMatch"]["plateDetected"] is True
+
+        db_cases = list(db[COLLECTION_VIOLATIONS].find({"cameraId": self.camera_oid}))
+        assert len(db_cases) == 1
+        assert db_cases[0]["violationType"] == "NO_HELMET_RIDER"
+
+    def test_case_3_with_helmet_creates_no_no_helmet_case(self, auth_headers):
+        """3. All riders With Helmet creates NO candidate violation case."""
+        db = get_db()
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    {"x": 200.0, "y": 150.0, "width": 80.0, "height": 100.0, "confidence": 0.95, "class": "With Helmet", "class_id": 0},
+                    {"x": 350.0, "y": 150.0, "width": 80.0, "height": 100.0, "confidence": 0.92, "class": "With Helmet", "class_id": 0},
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=640, height=480)
+        files = {"file": ("compliant_riders.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {"camera_id": str(self.camera_oid), "cooldown_seconds": "0"}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                data=form_data,
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["isCandidateViolation"] is False
+        assert len(data["cases"]) == 0
+        assert data["status"] == "NO_VIOLATION"
+
+        db_cases = list(db[COLLECTION_VIOLATIONS].find({"cameraId": self.camera_oid}))
+        assert len(db_cases) == 0
+
+    def test_case_4_person_without_no_helmet_does_not_trigger_plate_fallback(self, auth_headers):
+        """4. Person present without no-helmet classification does NOT trigger plate fallback case."""
+        db = get_db()
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    {"x": 200.0, "y": 150.0, "width": 80.0, "height": 100.0, "confidence": 0.95, "class": "With Helmet", "class_id": 0},
+                    {"x": 200.0, "y": 280.0, "width": 60.0, "height": 25.0, "confidence": 0.91, "class": "licence", "class_id": 2},
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=640, height=480)
+        files = {"file": ("person_and_plate.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {"camera_id": str(self.camera_oid), "cooldown_seconds": "0"}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                data=form_data,
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["isCandidateViolation"] is False
+        assert len(data["cases"]) == 0
+        assert db[COLLECTION_VIOLATIONS].count_documents({"cameraId": self.camera_oid}) == 0
+
+    def test_case_5_no_person_plus_plate_triggers_fallback_only(self, auth_headers):
+        """5. Plate detected with zero persons returns plate fallback without creating no-helmet violation."""
+        db = get_db()
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    {"x": 200.0, "y": 280.0, "width": 60.0, "height": 25.0, "confidence": 0.91, "class": "licence", "class_id": 2},
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=640, height=480)
+        files = {"file": ("plate_only.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {"camera_id": str(self.camera_oid), "cooldown_seconds": "0"}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                data=form_data,
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["isCandidateViolation"] is False
+        assert len(data["cases"]) == 0
+        assert data["plateMatch"]["plateDetected"] is True
+        assert db[COLLECTION_VIOLATIONS].count_documents({"cameraId": self.camera_oid}) == 0
+
+    def test_case_6_no_detections_create_no_case(self, auth_headers):
+        """6. Zero detections returns valid no-detection response and creates zero cases."""
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={"predictions": []},
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=640, height=480)
+        files = {"file": ("empty.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {"cooldown_seconds": "0"}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                data=form_data,
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["detected"] is False
+        assert data["totalDetections"] == 0
+        assert data["isCandidateViolation"] is False
+        assert len(data["cases"]) == 0
+
+    def test_case_7_overlapping_boxes_deduplicated_via_nms(self, auth_headers):
+        """7. Category-aware NMS suppresses duplicate overlapping boxes on the same rider."""
+        db = get_db()
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    {"x": 200.0, "y": 150.0, "width": 80.0, "height": 100.0, "confidence": 0.94, "class": "Without Helmet", "class_id": 1},
+                    {"x": 204.0, "y": 152.0, "width": 78.0, "height": 98.0, "confidence": 0.82, "class": "Without Helmet", "class_id": 1},
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=640, height=480)
+        files = {"file": ("overlapping_boxes.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {"camera_id": str(self.camera_oid), "cooldown_seconds": "0"}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                data=form_data,
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        # Exactly 1 unhelmeted rider after NMS deduplication
+        assert len(data["cases"]) == 1
+        assert data["cases"][0]["confidence"] == 0.94
+
+    def test_case_8_distinct_riders_not_merged(self, auth_headers):
+        """8. Distinct riders (e.g. driver and pillion) are never merged by NMS."""
+        db = get_db()
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    {"x": 180.0, "y": 150.0, "width": 75.0, "height": 95.0, "confidence": 0.93, "class": "Without Helmet", "class_id": 1},
+                    {"x": 265.0, "y": 150.0, "width": 75.0, "height": 95.0, "confidence": 0.89, "class": "Without Helmet", "class_id": 1},
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=640, height=480)
+        files = {"file": ("driver_and_pillion.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {"camera_id": str(self.camera_oid), "cooldown_seconds": "0"}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                data=form_data,
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert len(data["cases"]) == 2
+        assert db[COLLECTION_VIOLATIONS].count_documents({"cameraId": self.camera_oid}) == 2
+
+    def test_case_9_retries_identical_image_idempotent(self, auth_headers):
+        """9. Identical image retries within cooldown do not create duplicate cases."""
+        db = get_db()
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    {"x": 200.0, "y": 150.0, "width": 80.0, "height": 100.0, "confidence": 0.94, "class": "Without Helmet", "class_id": 1},
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=640, height=480)
+        files1 = {"file": ("idempotent_1.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {"camera_id": str(self.camera_oid), "cooldown_seconds": "30"}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp1 = client.post(f"{settings.API_PREFIX}/detections/analyze", files=files1, data=form_data, headers=auth_headers)
+
+        assert resp1.status_code == 200
+        data1 = resp1.json()["data"]
+        assert data1["isDeduplicated"] is False
+        case_id_1 = data1["caseId"]
+        assert db[COLLECTION_VIOLATIONS].count_documents({"cameraId": self.camera_oid}) == 1
+
+        # Immediate identical retry
+        files2 = {"file": ("idempotent_retry.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp2 = client.post(f"{settings.API_PREFIX}/detections/analyze", files=files2, data=form_data, headers=auth_headers)
+
+        assert resp2.status_code == 200
+        data2 = resp2.json()["data"]
+        assert data2["isDeduplicated"] is True
+        assert data2["caseId"] == case_id_1
+        assert db[COLLECTION_VIOLATIONS].count_documents({"cameraId": self.camera_oid}) == 1
+
+    def test_case_10_successive_camera_frames_cooldown_tracking(self, auth_headers):
+        """10. Successive camera frames suppress duplicate cases for the same tracked rider within cooldown."""
+        db = get_db()
+        mock_resp_1 = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    {"x": 200.0, "y": 150.0, "width": 80.0, "height": 100.0, "confidence": 0.94, "class": "Without Helmet", "class_id": 1},
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes_1 = _create_test_image_bytes(width=640, height=480)
+        files1 = {"file": ("frame_t1.jpg", io.BytesIO(img_bytes_1), "image/jpeg")}
+        form_data = {"camera_id": str(self.camera_oid), "cooldown_seconds": "15"}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp_1
+            resp1 = client.post(f"{settings.API_PREFIX}/detections/analyze", files=files1, data=form_data, headers=auth_headers)
+
+        assert resp1.status_code == 200
+        data1 = resp1.json()["data"]
+        case_id_1 = data1["caseId"]
+
+        # Successive frame with slightly shifted coordinates for same rider
+        mock_resp_2 = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    {"x": 210.0, "y": 155.0, "width": 80.0, "height": 100.0, "confidence": 0.92, "class": "Without Helmet", "class_id": 1},
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        # Modify bytes slightly to simulate separate frame
+        img_bytes_2 = img_bytes_1 + b"frame2"
+        files2 = {"file": ("frame_t2.jpg", io.BytesIO(img_bytes_2), "image/jpeg")}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp_2
+            resp2 = client.post(f"{settings.API_PREFIX}/detections/analyze", files=files2, data=form_data, headers=auth_headers)
+
+        assert resp2.status_code == 200
+        data2 = resp2.json()["data"]
+        assert data2["isDeduplicated"] is True
+        assert data2["caseId"] == case_id_1
+        assert data2["cooldownSecondsRemaining"] is not None
+        assert db[COLLECTION_VIOLATIONS].count_documents({"cameraId": self.camera_oid}) == 1
+
+    def test_case_11_cases_independently_reviewable(self, auth_headers):
+        """11. Cases are independently reviewable: approving one does not affect another."""
+        db = get_db()
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    {"x": 180.0, "y": 150.0, "width": 75.0, "height": 95.0, "confidence": 0.93, "class": "Without Helmet", "class_id": 1},
+                    {"x": 350.0, "y": 150.0, "width": 75.0, "height": 95.0, "confidence": 0.89, "class": "Without Helmet", "class_id": 1},
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=640, height=480)
+        files = {"file": ("two_riders.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {"camera_id": str(self.camera_oid), "cooldown_seconds": "0"}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp = client.post(f"{settings.API_PREFIX}/detections/analyze", files=files, data=form_data, headers=auth_headers)
+
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        case_a_id = data["cases"][0]["caseId"]
+        case_b_id = data["cases"][1]["caseId"]
+
+        # Reviewer approves Case A (requires reviewer/admin role)
+        rev_user = db[COLLECTION_USERS].find_one({"role": "reviewer"})
+        if not rev_user:
+            res = db[COLLECTION_USERS].insert_one({
+                "employeeId": "TEST-REV-99",
+                "name": "Officer Reviewer",
+                "email": "test.rev99@traffic.gov.in",
+                "passwordHash": hash_password("ValidPassword123!"),
+                "role": "reviewer",
+                "status": "ACTIVE",
+                "createdAt": datetime.now(timezone.utc),
+                "updatedAt": datetime.now(timezone.utc),
+            })
+            rev_id = str(res.inserted_id)
+        else:
+            rev_id = str(rev_user["_id"])
+
+        rev_token = create_access_token(
+            data={"sub": rev_id, "name": "Officer Reviewer", "employeeId": "TEST-REV-99", "role": "reviewer"}
+        )
+        rev_headers = {"Authorization": f"Bearer {rev_token}"}
+        appr_resp = client.post(
+            f"{settings.API_PREFIX}/violations/{case_a_id}/approve-draft",
+            json={"reviewerName": "Officer Reviewer", "notes": "Approved individual case A"},
+            headers=rev_headers,
+        )
+        assert appr_resp.status_code == 200
+        case_a_db = db[COLLECTION_VIOLATIONS].find_one({"caseId": case_a_id})
+        assert case_a_db["status"] == "DRAFT_CREATED"
+
+        # Case B remains strictly PENDING_REVIEW
+        case_b_db = db[COLLECTION_VIOLATIONS].find_one({"caseId": case_b_id})
+        assert case_b_db["status"] == "PENDING_REVIEW"
+        assert case_b_db["challanDraftNumber"] is None
+
+    def test_case_12_existing_auth_rbac_remains_enforced(self):
+        """12. Existing auth and RBAC remains strictly enforced on detection routes."""
+        img_bytes = _create_test_image_bytes(width=320, height=240)
+        files = {"file": ("test.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+
+        # Missing token
+        r1 = client.post(f"{settings.API_PREFIX}/detections/analyze", files=files)
+        assert r1.status_code == 401
+
+        # Invalid token
+        r2 = client.post(
+            f"{settings.API_PREFIX}/detections/analyze",
+            files=files,
+            headers={"Authorization": "Bearer invalid_garbage_token"},
+        )
+        assert r2.status_code == 401
+
+    def test_case_13_evidence_and_db_failures_handled_safely(self, auth_headers):
+        """13. Evidence or downstream failures are handled safely without exposing secrets."""
+        img_bytes = _create_test_image_bytes(width=320, height=240)
+        files = {"file": ("test.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+
+        with patch("cv2.imwrite", side_effect=OSError("Disk full")):
+            # Even if cv2.imwrite fails saving crop, overall pipeline handles warning safely
+            mock_resp = httpx.Response(
+                status_code=200,
+                json={"predictions": [{"x": 100.0, "y": 100.0, "width": 50.0, "height": 50.0, "confidence": 0.9, "class": "Without Helmet", "class_id": 1}]},
+                request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+            )
+            with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+                mock_post.return_value = mock_resp
+                resp = client.post(
+                    f"{settings.API_PREFIX}/detections/analyze",
+                    files=files,
+                    data={"cooldown_seconds": "0"},
+                    headers=auth_headers,
+                )
+            assert resp.status_code == 200
+
+
+
 

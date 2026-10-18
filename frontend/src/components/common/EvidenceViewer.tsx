@@ -42,7 +42,22 @@ export const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
 
   const resolvedEvidenceUrl = getMediaUrl(caseData.evidenceImageUrl);
   const ridersWithCrops = (caseData.riders || []).filter(r => Boolean(r.cropPath));
+  const effectiveRiderCrops = ridersWithCrops.length > 0 
+    ? ridersWithCrops 
+    : (caseData.riderCropUrl ? [{
+        detectionId: caseData.riderDetails?.detectionId || 'rider-1',
+        label: 'Rider Crop',
+        classification: caseData.riderDetails?.classification || 'WITHOUT_HELMET',
+        confidence: caseData.riderDetails?.confidence || caseData.confidence,
+        bbox: (caseData.riderDetails?.bbox || [0, 0, 0, 0]) as [number, number, number, number],
+        normalized: (caseData.riderDetails?.normalized || [0, 0, 0, 0]) as [number, number, number, number],
+        cropPath: caseData.riderCropUrl,
+        isViolation: true
+      }] : []);
+
   const hasPlateCrop = Boolean(caseData.plateMatch?.cropPath);
+  const hasRiderCrops = effectiveRiderCrops.length > 0;
+  const showPlateFallback = !hasRiderCrops && hasPlateCrop;
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs space-y-0">
@@ -192,26 +207,28 @@ export const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
       </div>
 
       {/* Detected Crops Section in Case Detail */}
-      {(ridersWithCrops.length > 0 || hasPlateCrop) && (
+      {(hasRiderCrops || showPlateFallback) && (
         <div className="p-4 bg-slate-50 border-t border-slate-200 space-y-3">
           <div className="flex items-center justify-between">
             <h4 className="text-xs font-bold uppercase tracking-wider text-slate-800 flex items-center gap-1.5">
               <Layers className="w-3.5 h-3.5 text-blue-600" />
-              Isolated Evidence Crops (Riders &amp; License Plate)
+              {hasRiderCrops ? 'Isolated Rider Evidence Crop' : 'Plate Fallback Evidence Crop'}
             </h4>
             <span className="text-[11px] text-slate-500 font-medium">
-              {ridersWithCrops.length} Rider Crop(s) • {hasPlateCrop ? '1 Plate Crop' : 'No Plate Crop'}
+              {hasRiderCrops
+                ? `${effectiveRiderCrops.length} Rider Crop(s)`
+                : 'Manual Plate Review Fallback'}
             </span>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
             {/* Rider Crops */}
-            {ridersWithCrops.map((r, idx) => (
+            {effectiveRiderCrops.map((r, idx) => (
               <EvidenceCropImage
                 key={r.detectionId || idx}
                 src={r.cropPath}
                 alt={r.label}
-                label={`Rider #${idx + 1}`}
+                label={`Rider Evidence #${idx + 1}`}
                 subtitle={r.detectionId}
                 confidence={r.confidence}
                 aspectRatio="aspect-square"
@@ -227,22 +244,18 @@ export const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
               />
             ))}
 
-            {/* License Plate Crop */}
-            {hasPlateCrop && (
+            {/* License Plate Fallback Crop (Only rendered when no rider crops exist) */}
+            {showPlateFallback && (
               <EvidenceCropImage
                 src={caseData.plateMatch?.cropPath}
                 alt={caseData.plateMatch?.normalizedPlate || 'License Plate'}
-                label="License Plate Crop"
+                label="License Plate Fallback"
                 subtitle={caseData.plateMatch?.normalizedPlate || 'Unread Plate'}
                 confidence={caseData.plateMatch?.confidence}
                 aspectRatio="aspect-square"
                 badge={
-                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                    caseData.plateMatch?.matchStatus === 'VERIFIED'
-                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                      : 'bg-amber-100 text-amber-800 border border-amber-300'
-                  }`}>
-                    {caseData.plateMatch?.matchStatus || 'MANUAL REQUIRED'}
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300">
+                    MANUAL REVIEW FALLBACK
                   </span>
                 }
               />
