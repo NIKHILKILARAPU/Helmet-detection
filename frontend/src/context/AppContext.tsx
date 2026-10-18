@@ -209,11 +209,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, [addToast]);
 
   // Reviewer actions with real backend endpoints
-  const approveDraft = useCallback(async (caseId: string, reviewerNotes?: string) => {
+  const approveDraft = useCallback(async (caseId: string, reviewerNotes?: string): Promise<boolean> => {
     try {
       const res = await violationsService.approveDraft(caseId, currentUser.name, reviewerNotes);
       if (res.success && res.updatedCase) {
-        setCases(prev => prev.map(c => c.id === caseId ? res.updatedCase : c));
+        setCases(prev => prev.map(c => c.id === caseId ? res.updatedCase! : c));
         addToast({
           type: 'success',
           title: 'Challan Draft Created',
@@ -223,21 +223,24 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         if (auditRes.success) {
           setSystemAuditLogs(auditRes.logs);
         }
+        return true;
       }
+      return false;
     } catch (err: any) {
       addToast({
         type: 'error',
         title: 'Draft Approval Failed',
         message: err.message || 'Could not approve case draft on server.'
       });
+      return false;
     }
   }, [currentUser.name, addToast]);
 
-  const rejectCase = useCallback(async (caseId: string, reason: string, notes?: string) => {
+  const rejectCase = useCallback(async (caseId: string, reason: string, notes?: string): Promise<boolean> => {
     try {
       const res = await violationsService.rejectCase(caseId, currentUser.name, reason, notes);
       if (res.success && res.updatedCase) {
-        setCases(prev => prev.map(c => c.id === caseId ? res.updatedCase : c));
+        setCases(prev => prev.map(c => c.id === caseId ? res.updatedCase! : c));
         addToast({
           type: 'info',
           title: 'Case Rejected',
@@ -247,13 +250,16 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         if (auditRes.success) {
           setSystemAuditLogs(auditRes.logs);
         }
+        return true;
       }
+      return false;
     } catch (err: any) {
       addToast({
         type: 'error',
         title: 'Case Rejection Failed',
         message: err.message || 'Could not reject case on server.'
       });
+      return false;
     }
   }, [currentUser.name, addToast]);
 

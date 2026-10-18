@@ -42,20 +42,20 @@ def _build_case_query(case_id: str) -> Dict[str, Any]:
     return {"$or": clauses}
 
 
+def _clean_mongo_types(val: Any) -> Any:
+    if isinstance(val, ObjectId):
+        return str(val)
+    if isinstance(val, dict):
+        return {k: _clean_mongo_types(v) for k, v in val.items()}
+    if isinstance(val, list):
+        return [_clean_mongo_types(v) for v in val]
+    return val
+
+
 def _serialize_violation(doc: Dict[str, Any]) -> Dict[str, Any]:
     """Normalizes MongoDB document into JSON-serializable dictionary."""
-    clean = dict(doc)
-    clean["id"] = clean.get("caseId") or str(clean["_id"])
-    if "_id" in clean:
-        clean["_id"] = str(clean["_id"])
-    if "cameraId" in clean and isinstance(clean["cameraId"], ObjectId):
-        clean["cameraId"] = str(clean["cameraId"])
-    if "personId" in clean and isinstance(clean["personId"], ObjectId):
-        clean["personId"] = str(clean["personId"])
-    if "vehicleId" in clean and isinstance(clean["vehicleId"], ObjectId):
-        clean["vehicleId"] = str(clean["vehicleId"])
-    if "reviewedBy" in clean and isinstance(clean["reviewedBy"], ObjectId):
-        clean["reviewedBy"] = str(clean["reviewedBy"])
+    clean = _clean_mongo_types(doc)
+    clean["id"] = clean.get("caseId") or str(clean.get("_id"))
     return clean
 
 
@@ -230,6 +230,29 @@ async def approve_challan_draft(
     query = _build_case_query(case_id)
     now = datetime.now(timezone.utc)
 
+    # Validate case existence, status, and required evidence prior to atomic transition
+    existing = db[COLLECTION_VIOLATIONS].find_one(query)
+    if not existing:
+        raise NotFoundError(entity="Violation Case", entity_id=case_id)
+    if existing.get("status") != ViolationStatus.PENDING_REVIEW.value:
+        current_status = existing.get("status")
+        raise ConflictError(
+            message=f"Case '{case_id}' cannot be approved because it is already in state '{current_status}'. "
+                    f"Double reviews are prevented by system concurrency controls."
+        )
+    evidence = existing.get("evidence")
+    rider_details = existing.get("riderDetails") or {}
+    has_evidence = False
+    if isinstance(evidence, dict):
+        has_evidence = bool(
+            (evidence.get("storagePath") or "").strip()
+            or (evidence.get("imageUrl") or "").strip()
+            or (evidence.get("riderCropPath") or "").strip()
+            or (rider_details.get("cropPath") or "").strip()
+        )
+    if not has_evidence:
+        raise ValidationError(message=f"Case '{case_id}' lacks required visual evidence to approve a draft sanction.")
+
     # Atomic condition: only transition if currently in PENDING_REVIEW
     update_query = {**query, "status": ViolationStatus.PENDING_REVIEW.value}
     draft_number = payload.challanDraftNumber or f"DFT-{case_id.upper()}"
@@ -254,15 +277,14 @@ async def approve_challan_draft(
 
     if not updated_doc:
         # Check if record exists under a different status (race condition / double review)
-        existing = db[COLLECTION_VIOLATIONS].find_one(query)
-        if existing:
-            current_status = existing.get("status")
+        concurrent = db[COLLECTION_VIOLATIONS].find_one(query)
+        if concurrent:
+            current_status = concurrent.get("status")
             raise ConflictError(
                 message=f"Case '{case_id}' cannot be approved because it is already in state '{current_status}'. "
                         f"Double reviews are prevented by system concurrency controls."
             )
-        # In mock or offline mode, synthesize response
-        pass
+        raise NotFoundError(entity="Violation Case", entity_id=case_id)
 
     # Audit entry
     audit_entry = {
@@ -327,6 +349,17 @@ async def reject_candidate_case(
     query = _build_case_query(case_id)
     now = datetime.now(timezone.utc)
 
+    # Pre-validate case existence and status prior to atomic rejection
+    existing = db[COLLECTION_VIOLATIONS].find_one(query)
+    if not existing:
+        raise NotFoundError(entity="Violation Case", entity_id=case_id)
+    if existing.get("status") != ViolationStatus.PENDING_REVIEW.value:
+        current_status = existing.get("status")
+        raise ConflictError(
+            message=f"Case '{case_id}' cannot be rejected because it is already in state '{current_status}'. "
+                    f"Double reviews are prevented by system concurrency controls."
+        )
+
     # Atomic condition: only transition if currently in PENDING_REVIEW
     update_query = {**query, "status": ViolationStatus.PENDING_REVIEW.value}
     update_fields = {
@@ -346,13 +379,14 @@ async def reject_candidate_case(
     )
 
     if not updated_doc:
-        existing = db[COLLECTION_VIOLATIONS].find_one(query)
-        if existing:
-            current_status = existing.get("status")
+        concurrent = db[COLLECTION_VIOLATIONS].find_one(query)
+        if concurrent:
+            current_status = concurrent.get("status")
             raise ConflictError(
                 message=f"Case '{case_id}' cannot be rejected because it is already in state '{current_status}'. "
                         f"Double reviews are prevented by system concurrency controls."
             )
+        raise NotFoundError(entity="Violation Case", entity_id=case_id)
 
     # Record append-only audit log
     audit_entry = {

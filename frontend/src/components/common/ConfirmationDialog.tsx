@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { AlertTriangle, CheckCircle2, ShieldAlert } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ShieldAlert, Loader2 } from 'lucide-react';
 import { Modal } from './Modal';
 
 interface ConfirmationDialogProps {
@@ -10,6 +10,7 @@ interface ConfirmationDialogProps {
   type: 'APPROVE_DRAFT' | 'REJECT_CASE' | 'GENERIC_DANGER';
   caseId?: string;
   confirmButtonText?: string;
+  isLoading?: boolean;
 }
 
 export const ConfirmationDialog: React.FC<ConfirmationDialogProps> = ({
@@ -19,7 +20,8 @@ export const ConfirmationDialog: React.FC<ConfirmationDialogProps> = ({
   title,
   type,
   caseId,
-  confirmButtonText
+  confirmButtonText,
+  isLoading = false
 }) => {
   const [notes, setNotes] = useState('');
   const [reason, setReason] = useState('FALSE_DETECTION_SHADOW');
@@ -28,9 +30,9 @@ export const ConfirmationDialog: React.FC<ConfirmationDialogProps> = ({
   const isReject = type === 'REJECT_CASE';
 
   const handleConfirm = () => {
+    if (isLoading) return;
     onConfirm(notes, reason);
     setNotes('');
-    onClose();
   };
 
   return (
@@ -107,7 +109,8 @@ export const ConfirmationDialog: React.FC<ConfirmationDialogProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors"
+            disabled={isLoading}
+            className="px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Cancel
           </button>
@@ -115,14 +118,25 @@ export const ConfirmationDialog: React.FC<ConfirmationDialogProps> = ({
           <button
             type="button"
             onClick={handleConfirm}
-            className={`px-4 py-2 text-xs font-semibold text-white rounded-lg transition-colors flex items-center gap-1.5 shadow-xs ${
+            disabled={isLoading}
+            className={`px-4 py-2 text-xs font-semibold text-white rounded-lg transition-colors flex items-center gap-1.5 shadow-xs disabled:opacity-60 disabled:cursor-not-allowed ${
               isReject 
                 ? 'bg-red-600 hover:bg-red-700 focus:ring-red-500' 
                 : 'bg-blue-600 hover:bg-blue-700 focus:ring-blue-500'
             }`}
           >
-            {isReject ? <ShieldAlert className="w-3.5 h-3.5" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
-            <span>{confirmButtonText || (isReject ? 'Confirm Rejection' : 'Confirm Draft Approval')}</span>
+            {isLoading ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : isReject ? (
+              <ShieldAlert className="w-3.5 h-3.5" />
+            ) : (
+              <CheckCircle2 className="w-3.5 h-3.5" />
+            )}
+            <span>
+              {isLoading 
+                ? (isReject ? 'Rejecting Case...' : 'Approving Draft...')
+                : (confirmButtonText || (isReject ? 'Confirm Rejection' : 'Confirm Draft Approval'))}
+            </span>
           </button>
         </div>
       </div>

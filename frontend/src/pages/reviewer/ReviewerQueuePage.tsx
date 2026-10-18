@@ -7,7 +7,9 @@ import {
   FileCheck2, 
   User, 
   History, 
-  Check 
+  Check,
+  Users,
+  Lock
 } from 'lucide-react';
 import { useApp } from '../../context';
 import type { ViolationStatus } from '../../types';
@@ -25,6 +27,7 @@ export const ReviewerQueuePage: React.FC = () => {
   );
   const [searchQuery, setSearchQuery] = useState('');
   const [reviewerNotes, setReviewerNotes] = useState('');
+  const [actionLoadingCaseId, setActionLoadingCaseId] = useState<string | null>(null);
   
   // Dialog state
   const [dialogState, setDialogState] = useState<{
@@ -50,7 +53,7 @@ export const ReviewerQueuePage: React.FC = () => {
   const activeCase = cases.find(c => c.id === selectedCaseId) || filteredCases[0] || null;
 
   const handleOpenApproveDialog = () => {
-    if (!activeCase) return;
+    if (!activeCase || activeCase.status !== 'PENDING_REVIEW') return;
     setDialogState({
       isOpen: true,
       type: 'APPROVE_DRAFT',
@@ -59,7 +62,7 @@ export const ReviewerQueuePage: React.FC = () => {
   };
 
   const handleOpenRejectDialog = () => {
-    if (!activeCase) return;
+    if (!activeCase || activeCase.status !== 'PENDING_REVIEW') return;
     setDialogState({
       isOpen: true,
       type: 'REJECT_CASE',
@@ -67,17 +70,33 @@ export const ReviewerQueuePage: React.FC = () => {
     });
   };
 
-  const handleConfirmAction = (notes?: string, reason?: string) => {
-    if (!activeCase) return;
+  const handleConfirmAction = async (notes?: string, reason?: string) => {
+    if (!activeCase || actionLoadingCaseId) return;
+    const targetCaseId = activeCase.id;
+    setActionLoadingCaseId(targetCaseId);
 
-    if (dialogState.type === 'APPROVE_DRAFT') {
-      approveDraft(activeCase.id, notes || reviewerNotes);
-      setReviewerNotes('');
-    } else if (dialogState.type === 'REJECT_CASE') {
-      rejectCase(activeCase.id, reason || 'FALSE_DETECTION_SHADOW', notes || reviewerNotes);
-      setReviewerNotes('');
+    try {
+      if (dialogState.type === 'APPROVE_DRAFT') {
+        const ok = await approveDraft(targetCaseId, notes || reviewerNotes);
+        if (ok) {
+          setReviewerNotes('');
+          setDialogState(prev => ({ ...prev, isOpen: false }));
+        }
+      } else if (dialogState.type === 'REJECT_CASE') {
+        const ok = await rejectCase(targetCaseId, reason || 'FALSE_DETECTION_SHADOW', notes || reviewerNotes);
+        if (ok) {
+          setReviewerNotes('');
+          setDialogState(prev => ({ ...prev, isOpen: false }));
+        }
+      }
+    } finally {
+      setActionLoadingCaseId(null);
     }
   };
+
+  const siblingCases = (activeCase && activeCase.evidenceImageUrl)
+    ? cases.filter(c => c.evidenceImageUrl === activeCase.evidenceImageUrl && c.id !== activeCase.id)
+    : [];
 
   return (
     <div className="space-y-4">
@@ -238,6 +257,43 @@ export const ReviewerQueuePage: React.FC = () => {
                 </div>
               </div>
 
+              {/* Multi-Rider Single Frame Context Banner */}
+              {siblingCases.length > 0 && (
+                <div className="rounded-xl bg-indigo-50/80 border border-indigo-200 p-3.5 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Users className="w-4 h-4 text-indigo-700" />
+                      <span className="text-xs font-bold text-indigo-950">
+                        Multi-Rider Frame Context ({siblingCases.length + 1} riders detected in same frame)
+                      </span>
+                    </div>
+                    <span className="text-[11px] text-indigo-700 font-semibold bg-indigo-100 px-2 py-0.5 rounded">
+                      Independent Review Mandated
+                    </span>
+                  </div>
+                  <p className="text-xs text-indigo-900 leading-relaxed">
+                    This capture contains multiple detected unhelmeted riders. Review decisions apply <strong>strictly to current rider {activeCase.id}</strong>. Sibling cases remain unaffected.
+                  </p>
+                  <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                    <span className="text-[11px] font-semibold text-indigo-900 mr-1">Switch Rider:</span>
+                    <span className="px-2 py-1 rounded-md text-xs font-mono font-bold bg-indigo-600 text-white shadow-xs">
+                      Active: {activeCase.id}
+                    </span>
+                    {siblingCases.map(sib => (
+                      <button
+                        key={sib.id}
+                        type="button"
+                        onClick={() => setSelectedCaseId(sib.id)}
+                        className="px-2 py-1 rounded-md text-xs font-mono font-semibold bg-white text-slate-700 hover:text-indigo-600 hover:border-indigo-300 border border-slate-200 transition-colors flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                      >
+                        <span>{sib.id}</span>
+                        <StatusBadge status={sib.status} size="sm" />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Evidence Viewer Stage with Bounding Boxes */}
               <EvidenceViewer caseData={activeCase} showDetails={true} />
 
@@ -317,44 +373,73 @@ export const ReviewerQueuePage: React.FC = () => {
 
               {/* Review Actions Panel */}
               <div className="pt-4 border-t border-slate-200 space-y-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Reviewer Notes / Evidence Observations:
-                  </label>
-                  <input
-                    type="text"
-                    value={reviewerNotes}
-                    onChange={e => setReviewerNotes(e.target.value)}
-                    placeholder="Enter visual confirmation details or reasons before approving/rejecting..."
-                    className="w-full text-xs px-3 py-2 rounded-lg border border-slate-300 bg-white text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
+                {activeCase.status === 'PENDING_REVIEW' ? (
+                  <>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Reviewer Notes / Evidence Observations:
+                      </label>
+                      <input
+                        type="text"
+                        value={reviewerNotes}
+                        onChange={e => setReviewerNotes(e.target.value)}
+                        placeholder="Enter visual confirmation details or reasons before approving/rejecting..."
+                        className="w-full text-xs px-3 py-2 rounded-lg border border-slate-300 bg-white text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
 
-                <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
-                  <div className="text-[11px] text-slate-400">
-                    Due-process protocol active. All decisions logged to immutable audit trail.
+                    <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+                      <div className="text-[11px] text-slate-400">
+                        Due-process protocol active. Independent decision logged to immutable audit trail.
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handleOpenRejectDialog}
+                          disabled={Boolean(actionLoadingCaseId)}
+                          className="px-4 py-2 text-xs font-bold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                        >
+                          <XCircle className="w-3.5 h-3.5" />
+                          <span>Reject Candidate Case</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={handleOpenApproveDialog}
+                          disabled={Boolean(actionLoadingCaseId)}
+                          className="px-4 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors flex items-center gap-1.5 shadow-xs disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>Approve Challan Draft</span>
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className={`p-4 rounded-xl border flex items-start gap-3 ${
+                    activeCase.status === 'DRAFT_CREATED'
+                      ? 'bg-blue-50/80 border-blue-200 text-blue-950'
+                      : 'bg-rose-50/80 border-rose-200 text-rose-950'
+                  }`}>
+                    <Lock className="w-4 h-4 shrink-0 mt-0.5" />
+                    <div className="text-xs space-y-1">
+                      <div className="font-bold flex items-center gap-2">
+                        <span>
+                          {activeCase.status === 'DRAFT_CREATED'
+                            ? 'Case Approved: Provisional Challan Draft Initiated'
+                            : 'Case Evaluated: Candidate Rejected'}
+                        </span>
+                        <StatusBadge status={activeCase.status} size="sm" />
+                      </div>
+                      <p className="text-[11px] leading-relaxed opacity-90">
+                        {activeCase.status === 'DRAFT_CREATED'
+                          ? `Draft #${activeCase.challanDraftNumber || 'RECORDED'} has been registered for this rider. Review decisions are independent and do not cascade across other co-riders.`
+                          : 'This candidate case has been rejected with documented cause in the audit history. Status is locked from further review changes.'}
+                      </p>
+                    </div>
                   </div>
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={handleOpenRejectDialog}
-                      className="px-4 py-2 text-xs font-bold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg transition-colors flex items-center gap-1.5"
-                    >
-                      <XCircle className="w-3.5 h-3.5" />
-                      <span>Reject Candidate Case</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={handleOpenApproveDialog}
-                      className="px-4 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors flex items-center gap-1.5 shadow-xs"
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>Approve Challan Draft</span>
-                    </button>
-                  </div>
-                </div>
+                )}
               </div>
             </div>
           ) : (
@@ -371,11 +456,16 @@ export const ReviewerQueuePage: React.FC = () => {
       {/* Confirmation Dialog */}
       <ConfirmationDialog
         isOpen={dialogState.isOpen}
-        onClose={() => setDialogState(prev => ({ ...prev, isOpen: false }))}
+        onClose={() => {
+          if (!actionLoadingCaseId) {
+            setDialogState(prev => ({ ...prev, isOpen: false }));
+          }
+        }}
         onConfirm={handleConfirmAction}
         type={dialogState.type}
         title={dialogState.type === 'APPROVE_DRAFT' ? 'Confirm Challan Draft Creation' : 'Reject Candidate Detection'}
         caseId={dialogState.caseId}
+        isLoading={Boolean(actionLoadingCaseId)}
       />
     </div>
   );

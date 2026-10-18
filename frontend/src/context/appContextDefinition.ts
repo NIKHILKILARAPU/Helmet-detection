@@ -38,8 +38,8 @@ export interface AppContextType {
   removeToast: (id: string) => void;
   activeNavTab: string;
   setActiveNavTab: (tab: string) => void;
-  approveDraft: (caseId: string, reviewerNotes?: string) => void;
-  rejectCase: (caseId: string, reason: string, notes?: string) => void;
+  approveDraft: (caseId: string, reviewerNotes?: string) => Promise<boolean>;
+  rejectCase: (caseId: string, reason: string, notes?: string) => Promise<boolean>;
   addNewCapturedCase: (newCase: ViolationCase) => void;
   addCameraSource: (newSource: CameraSourceRecord) => void;
   refreshAllData: () => Promise<void>;

@@ -33,16 +33,66 @@ export function mapBackendViolationToCase(doc: any): ViolationCase {
     type: 'WEBCAM' as const
   };
 
-  const boundingBoxes: BoundingBox[] = Array.isArray(doc.boundingBoxes) ? doc.boundingBoxes.map((b: any, idx: number) => ({
-    id: b.id || `bb-${idx}`,
-    label: b.label || 'RIDER',
-    confidence: b.confidence ?? 0.9,
-    x: b.x ?? 0,
-    y: b.y ?? 0,
-    width: b.width ?? 0,
-    height: b.height ?? 0,
-    color: b.color || (b.label === 'Without Helmet' || b.label === 'NO_HELMET' ? '#DC2626' : '#15803D')
-  })) : [];
+  const boundingBoxes: BoundingBox[] = Array.isArray(doc.boundingBoxes) ? doc.boundingBoxes.map((b: any, idx: number) => {
+    let x = 0, y = 0, width = 0, height = 0;
+    if (b.x !== undefined && b.width !== undefined) {
+      x = b.x;
+      y = b.y ?? 0;
+      width = b.width;
+      height = b.height ?? 0;
+    } else if (b.coordinates) {
+      if (Array.isArray(b.coordinates) && b.coordinates.length >= 4) {
+        const [x1, y1, x2, y2] = b.coordinates;
+        x = x1 * 100;
+        y = y1 * 100;
+        width = Math.max(0, (x2 - x1) * 100);
+        height = Math.max(0, (y2 - y1) * 100);
+      } else if (typeof b.coordinates === 'object') {
+        const x1 = b.coordinates.x1 ?? b.coordinates.xmin ?? 0;
+        const y1 = b.coordinates.y1 ?? b.coordinates.ymin ?? 0;
+        const x2 = b.coordinates.x2 ?? b.coordinates.xmax ?? 0;
+        const y2 = b.coordinates.y2 ?? b.coordinates.ymax ?? 0;
+        x = x1 * 100;
+        y = y1 * 100;
+        width = Math.max(0, (x2 - x1) * 100);
+        height = Math.max(0, (y2 - y1) * 100);
+      }
+    } else if (doc.riderDetails?.normalized && Array.isArray(doc.riderDetails.normalized) && doc.riderDetails.normalized.length >= 4) {
+      const [x1, y1, x2, y2] = doc.riderDetails.normalized;
+      x = x1 * 100;
+      y = y1 * 100;
+      width = Math.max(0, (x2 - x1) * 100);
+      height = Math.max(0, (y2 - y1) * 100);
+    }
+
+    const label = b.className || b.label || 'Without Helmet';
+    const isViolation = label === 'Without Helmet' || label === 'NO_HELMET' || label === 'NO_HELMET_RIDER';
+
+    return {
+      id: b.id || `bb-${idx}`,
+      label: label as any,
+      confidence: b.confidence ?? doc.confidence ?? 0.9,
+      x,
+      y,
+      width,
+      height,
+      color: b.color || (isViolation ? '#DC2626' : '#15803D')
+    };
+  }) : [];
+
+  if (boundingBoxes.length === 0 && doc.riderDetails?.normalized && Array.isArray(doc.riderDetails.normalized) && doc.riderDetails.normalized.length >= 4) {
+    const [x1, y1, x2, y2] = doc.riderDetails.normalized;
+    boundingBoxes.push({
+      id: `bb-rider-${id}`,
+      label: (doc.riderDetails.classification === 'WITH_HELMET' ? 'With Helmet' : 'Without Helmet') as any,
+      confidence: doc.riderDetails.confidence ?? doc.confidence ?? 0.9,
+      x: x1 * 100,
+      y: y1 * 100,
+      width: Math.max(0, (x2 - x1) * 100),
+      height: Math.max(0, (y2 - y1) * 100),
+      color: doc.riderDetails.classification === 'WITH_HELMET' ? '#15803D' : '#DC2626'
+    });
+  }
 
   const reviewHistory: ReviewAuditLog[] = Array.isArray(doc.reviewHistory) && doc.reviewHistory.length > 0 
     ? doc.reviewHistory 
@@ -52,7 +102,8 @@ export function mapBackendViolationToCase(doc: any): ViolationCase {
         actor: String(doc.reviewedBy),
         role: 'reviewer',
         action: (doc.status === 'REJECTED' ? 'CASE_REJECTED' : 'DRAFT_APPROVED') as any,
-        notes: doc.reviewerNotes
+        notes: doc.reviewerNotes,
+        reason: doc.rejectionReason
       }] : []);
 
   return {
@@ -133,9 +184,12 @@ class ViolationsService {
       throw new Error(res.error || `Failed to approve draft for case ${caseId}`);
     }
 
+    // Fetch fresh full case document from database to preserve all evidence, crops, and metadata
+    const freshCase = await this.getCaseById(caseId);
+
     return {
       success: true,
-      updatedCase: mapBackendViolationToCase(res.data),
+      updatedCase: freshCase || mapBackendViolationToCase(res.data),
       isDemo: false
     };
   }
@@ -156,9 +210,12 @@ class ViolationsService {
       throw new Error(res.error || `Failed to reject case ${caseId}`);
     }
 
+    // Fetch fresh full case document from database to preserve all evidence, crops, and metadata
+    const freshCase = await this.getCaseById(caseId);
+
     return {
       success: true,
-      updatedCase: mapBackendViolationToCase(res.data),
+      updatedCase: freshCase || mapBackendViolationToCase(res.data),
       isDemo: false
     };
   }
