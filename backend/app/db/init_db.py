@@ -253,6 +253,7 @@ def main() -> int:
         print("     - Ensure your IP address is whitelisted in Atlas Network Access")
         print("!" * 70)
         return 1
+    
 
     except Exception as exc:
         print(f"\n[FATAL] Unexpected error during initialization: {exc}")

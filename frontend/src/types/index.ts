@@ -71,11 +71,21 @@ export interface ViolationCase {
   riderCropUrl?: string | null;
   riderDetails?: {
     detectionId?: string;
+    caseId?: string;
     classification?: string;
+    helmetClass?: string;
+    helmetConfidence?: number;
     confidence?: number;
     bbox?: [number, number, number, number];
     normalized?: [number, number, number, number];
     cropPath?: string | null;
+    vehicleType?: string;
+    vehicleConfidence?: number | null;
+    vehicleBbox?: [number, number, number, number] | null;
+    associationScore?: number;
+    eligibleForChallan?: boolean;
+    exclusionReason?: string | null;
+    reviewStatus?: string;
   } | null;
 }
 
@@ -239,6 +249,7 @@ export interface DetectionBox {
 
 export interface RiderDetection {
   detectionId: string;
+  caseId?: string | null;
   label: string;
   classification: 'WITH_HELMET' | 'WITHOUT_HELMET' | 'UNKNOWN' | string;
   confidence: number;
@@ -246,6 +257,15 @@ export interface RiderDetection {
   normalized: [number, number, number, number];
   cropPath?: string | null;
   isViolation: boolean;
+  vehicleType?: string;
+  vehicleConfidence?: number | null;
+  vehicleBbox?: [number, number, number, number] | null;
+  associationScore?: number | null;
+  eligibleForChallan?: boolean;
+  exclusionReason?: string | null;
+  helmetClass?: string | null;
+  helmetConfidence?: number | null;
+  reviewStatus?: string | null;
 }
 
 export interface PlateMatchResult {
@@ -273,6 +293,13 @@ export interface IngestedCaseSummary {
   bbox: [number, number, number, number];
   normalized: [number, number, number, number];
   isDeduplicated: boolean;
+  vehicleType?: string;
+  vehicleConfidence?: number | null;
+  vehicleBbox?: [number, number, number, number] | null;
+  associationScore?: number | null;
+  eligibleForChallan?: boolean;
+  exclusionReason?: string | null;
+  reviewStatus?: string | null;
 }
 
 export interface DetectionAnalysisResult {

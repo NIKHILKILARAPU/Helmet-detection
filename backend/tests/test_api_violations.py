@@ -10,7 +10,7 @@ from main import app
 from app.config import settings
 from app.core.security import hash_password, create_access_token
 from app.db.connection import get_db
-from app.db.collections import COLLECTION_USERS, COLLECTION_VIOLATIONS
+from app.db.collections import COLLECTION_USERS, COLLECTION_VIOLATIONS, COLLECTION_AUDIT_LOGS
 
 client = TestClient(app)
 
@@ -438,6 +438,253 @@ class TestViolationsEndpoints:
             assert res_rej.status_code == 403
             assert res_rej.json()["error_code"] == "FORBIDDEN"
 
+            # Attempt reconcile-cyclists
+            res_rec = client.post(
+                f"{settings.API_PREFIX}/violations/reconcile-cyclists",
+                headers=op_headers,
+            )
+            assert res_rec.status_code == 403
+            assert res_rec.json()["error_code"] == "FORBIDDEN"
+
         finally:
             db[COLLECTION_USERS].delete_many({"email": op_email})
+
+    def test_multiple_riders_same_image_appear_independently_in_list_violations(self):
+        """Multiple riders from one image appear as independent cases in GET /violations."""
+        db = get_db()
+        now = datetime.now(timezone.utc)
+        cam_id = ObjectId()
+        storage_path = "/uploads/evidence/multi_rider_frame.jpg"
+        case_a = "TG-MULTI-RID-01"
+        case_b = "TG-MULTI-RID-02"
+
+        db[COLLECTION_VIOLATIONS].delete_many({"caseId": {"$in": [case_a, case_b]}})
+
+        doc_a = {
+            "caseId": case_a,
+            "cameraId": cam_id,
+            "capturedAt": now,
+            "violationType": "NO_HELMET_RIDER",
+            "confidence": 0.94,
+            "status": "PENDING_REVIEW",
+            "evidence": {"storagePath": storage_path},
+            "evidenceQuality": "HIGH",
+            "boundingBoxes": [{"className": "NO_HELMET", "coordinates": [50, 100, 120, 200]}],
+            "riderDetails": {"detectionId": "rider_1", "vehicleType": "MOTORCYCLE", "eligibleForChallan": True},
+            "identityVerificationStatus": "UNVERIFIED",
+            "createdAt": now,
+            "updatedAt": now,
+        }
+        doc_b = {
+            "caseId": case_b,
+            "cameraId": cam_id,
+            "capturedAt": now,
+            "violationType": "NO_HELMET_RIDER",
+            "confidence": 0.91,
+            "status": "PENDING_REVIEW",
+            "evidence": {"storagePath": storage_path},
+            "evidenceQuality": "HIGH",
+            "boundingBoxes": [{"className": "NO_HELMET", "coordinates": [250, 100, 320, 200]}],
+            "riderDetails": {"detectionId": "rider_2", "vehicleType": "MOTORCYCLE", "eligibleForChallan": True},
+            "identityVerificationStatus": "UNVERIFIED",
+            "createdAt": now,
+            "updatedAt": now,
+        }
+        db[COLLECTION_VIOLATIONS].insert_many([doc_a, doc_b])
+
+        try:
+            resp = client.get(f"{settings.API_PREFIX}/violations")
+            assert resp.status_code == 200
+            data = resp.json()["data"]
+            found_ids = [c["id"] for c in data if c["id"] in (case_a, case_b)]
+            assert len(found_ids) == 2
+            assert case_a in found_ids
+            assert case_b in found_ids
+
+            case_a_res = next(c for c in data if c["id"] == case_a)
+            case_b_res = next(c for c in data if c["id"] == case_b)
+            assert case_a_res["evidenceImageUrl"] == case_b_res["evidenceImageUrl"]
+            assert case_a_res["boundingBoxes"] != case_b_res["boundingBoxes"]
+        finally:
+            db[COLLECTION_VIOLATIONS].delete_many({"caseId": {"$in": [case_a, case_b]}})
+
+    def test_list_violations_pending_review_excludes_cyclists(self):
+        """GET /violations?status=PENDING_REVIEW excludes historical or mistakenly created bicycle cases."""
+        db = get_db()
+        now = datetime.now(timezone.utc)
+        cam_id = ObjectId()
+        case_cyclist = "TG-CYCLIST-HIST-01"
+        case_moto = "TG-MOTO-PEND-01"
+
+        db[COLLECTION_VIOLATIONS].delete_many({"caseId": {"$in": [case_cyclist, case_moto]}})
+
+        doc_cyclist = {
+            "caseId": case_cyclist,
+            "cameraId": cam_id,
+            "capturedAt": now,
+            "violationType": "NO_HELMET_RIDER",
+            "confidence": 0.88,
+            "status": "PENDING_REVIEW",
+            "evidence": {"storagePath": "/uploads/evidence/cycle.jpg"},
+            "evidenceQuality": "HIGH",
+            "boundingBoxes": [{"className": "NO_HELMET"}],
+            "riderDetails": {"detectionId": "rider_c", "vehicleType": "BICYCLE", "eligibleForChallan": False},
+            "identityVerificationStatus": "UNVERIFIED",
+            "createdAt": now,
+            "updatedAt": now,
+        }
+        doc_moto = {
+            "caseId": case_moto,
+            "cameraId": cam_id,
+            "capturedAt": now,
+            "violationType": "NO_HELMET_RIDER",
+            "confidence": 0.95,
+            "status": "PENDING_REVIEW",
+            "evidence": {"storagePath": "/uploads/evidence/moto.jpg"},
+            "evidenceQuality": "HIGH",
+            "boundingBoxes": [{"className": "NO_HELMET"}],
+            "riderDetails": {"detectionId": "rider_m", "vehicleType": "MOTORCYCLE", "eligibleForChallan": True},
+            "identityVerificationStatus": "UNVERIFIED",
+            "createdAt": now,
+            "updatedAt": now,
+        }
+        db[COLLECTION_VIOLATIONS].insert_many([doc_cyclist, doc_moto])
+
+        try:
+            resp = client.get(f"{settings.API_PREFIX}/violations?status=PENDING_REVIEW")
+            assert resp.status_code == 200
+            data = resp.json()["data"]
+            ids = [c["id"] for c in data]
+            assert case_moto in ids
+            assert case_cyclist not in ids
+        finally:
+            db[COLLECTION_VIOLATIONS].delete_many({"caseId": {"$in": [case_cyclist, case_moto]}})
+
+    def test_reconcile_cyclists_endpoint_transitions_records_and_audits(self):
+        """POST /violations/reconcile-cyclists transitions invalid bicycle records from PENDING_REVIEW to REJECTED."""
+        db = get_db()
+        now = datetime.now(timezone.utc)
+        cam_id = ObjectId()
+        case_reconcile = "TG-RECONCILE-CYCLE-01"
+
+        db[COLLECTION_VIOLATIONS].delete_many({"caseId": case_reconcile})
+        db[COLLECTION_AUDIT_LOGS].delete_many({"targetCaseId": case_reconcile})
+
+        db[COLLECTION_VIOLATIONS].insert_one({
+            "caseId": case_reconcile,
+            "cameraId": cam_id,
+            "capturedAt": now,
+            "violationType": "NO_HELMET_RIDER",
+            "confidence": 0.90,
+            "status": "PENDING_REVIEW",
+            "evidence": {"storagePath": "/uploads/evidence/cycle_rec.jpg"},
+            "evidenceQuality": "HIGH",
+            "boundingBoxes": [{"className": "NO_HELMET"}],
+            "riderDetails": {"detectionId": "rider_rec", "vehicleType": "BICYCLE", "eligibleForChallan": False},
+            "identityVerificationStatus": "UNVERIFIED",
+            "createdAt": now,
+            "updatedAt": now,
+        })
+
+        token = self._get_reviewer_token()
+        headers = {"Authorization": f"Bearer {token}"}
+
+        try:
+            resp = client.post(f"{settings.API_PREFIX}/violations/reconcile-cyclists", headers=headers)
+            assert resp.status_code == 200
+            res_data = resp.json()
+            assert res_data["success"] is True
+            assert res_data["data"]["reconciledCount"] >= 1
+
+            # Verify case is now REJECTED with BICYCLE_EXCLUDED
+            updated = db[COLLECTION_VIOLATIONS].find_one({"caseId": case_reconcile})
+            assert updated is not None
+            assert updated["status"] == "REJECTED"
+            assert updated["rejectionReason"] == "BICYCLE_EXCLUDED"
+
+            # Verify audit trail
+            audit = db[COLLECTION_AUDIT_LOGS].find_one({"entityId": case_reconcile})
+            assert audit is not None
+            assert audit["action"] == "STATUTORY_CYCLIST_EXCLUSION"
+            assert audit["metadata"]["newStatus"] == "REJECTED"
+        finally:
+            db[COLLECTION_VIOLATIONS].delete_many({"caseId": case_reconcile})
+            db[COLLECTION_AUDIT_LOGS].delete_many({"entityId": case_reconcile})
+
+    def test_independent_approval_does_not_mutate_sibling_case(self):
+        """Approving Case A creates a draft only for Case A; Case B from the same image remains in PENDING_REVIEW."""
+        db = get_db()
+        now = datetime.now(timezone.utc)
+        cam_id = ObjectId()
+        case_a = "TG-INDEP-01"
+        case_b = "TG-INDEP-02"
+        storage_path = "/uploads/evidence/same_capture.jpg"
+
+        db[COLLECTION_VIOLATIONS].delete_many({"caseId": {"$in": [case_a, case_b]}})
+
+        doc_a = {
+            "caseId": case_a,
+            "cameraId": cam_id,
+            "capturedAt": now,
+            "violationType": "NO_HELMET_RIDER",
+            "confidence": 0.93,
+            "status": "PENDING_REVIEW",
+            "evidence": {"storagePath": storage_path},
+            "evidenceQuality": "HIGH",
+            "boundingBoxes": [{"className": "NO_HELMET"}],
+            "riderDetails": {"detectionId": "rider_a", "vehicleType": "MOTORCYCLE", "eligibleForChallan": True},
+            "identityVerificationStatus": "UNVERIFIED",
+            "createdAt": now,
+            "updatedAt": now,
+        }
+        doc_b = {
+            "caseId": case_b,
+            "cameraId": cam_id,
+            "capturedAt": now,
+            "violationType": "NO_HELMET_RIDER",
+            "confidence": 0.91,
+            "status": "PENDING_REVIEW",
+            "evidence": {"storagePath": storage_path},
+            "evidenceQuality": "HIGH",
+            "boundingBoxes": [{"className": "NO_HELMET"}],
+            "riderDetails": {"detectionId": "rider_b", "vehicleType": "MOTORCYCLE", "eligibleForChallan": True},
+            "identityVerificationStatus": "UNVERIFIED",
+            "createdAt": now,
+            "updatedAt": now,
+        }
+        db[COLLECTION_VIOLATIONS].insert_many([doc_a, doc_b])
+
+        token = self._get_reviewer_token()
+        headers = {"Authorization": f"Bearer {token}"}
+
+        try:
+            # 1. Approve Case A
+            resp_appr = client.post(
+                f"{settings.API_PREFIX}/violations/{case_a}/approve-draft",
+                json={"reviewerName": "Officer Sharma", "notes": "Clear violation for rider 1"},
+                headers=headers,
+            )
+            assert resp_appr.status_code == 200
+            assert resp_appr.json()["data"]["status"] == "DRAFT_CREATED"
+
+            # 2. Check Case B is still strictly PENDING_REVIEW
+            b_doc = db[COLLECTION_VIOLATIONS].find_one({"caseId": case_b})
+            assert b_doc["status"] == "PENDING_REVIEW"
+            assert "challanDraftNumber" not in b_doc or b_doc["challanDraftNumber"] is None
+
+            # 3. Reject Case B with distinct reason
+            resp_rej = client.post(
+                f"{settings.API_PREFIX}/violations/{case_b}/reject",
+                json={"reviewerName": "Officer Sharma", "reason": "OBSTRUCTION_OCCLUSION", "notes": "Rider face obscured"},
+                headers=headers,
+            )
+            assert resp_rej.status_code == 200
+            assert resp_rej.json()["data"]["status"] == "REJECTED"
+
+            # 4. Check Case A is still DRAFT_CREATED
+            a_doc = db[COLLECTION_VIOLATIONS].find_one({"caseId": case_a})
+            assert a_doc["status"] == "DRAFT_CREATED"
+        finally:
+            db[COLLECTION_VIOLATIONS].delete_many({"caseId": {"$in": [case_a, case_b]}})
+
 

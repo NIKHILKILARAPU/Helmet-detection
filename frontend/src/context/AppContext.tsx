@@ -80,12 +80,34 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setToasts(prev => prev.filter(t => t.id !== id));
   }, []);
 
+  const [isCasesLoading, setIsCasesLoading] = useState<boolean>(false);
+  const [casesError, setCasesError] = useState<string | null>(null);
+
   const refreshHealth = useCallback(async () => {
     const health = await healthService.checkHealth();
     setSystemHealth(health);
   }, []);
 
+  const refreshCases = useCallback(async () => {
+    setIsCasesLoading(true);
+    setCasesError(null);
+    try {
+      const res = await violationsService.getCases();
+      if (res.error) {
+        setCasesError(res.error);
+      } else {
+        setCases(res.cases);
+      }
+    } catch (err: any) {
+      setCasesError(err.message || 'Failed to fetch candidate cases from database.');
+    } finally {
+      setIsCasesLoading(false);
+    }
+  }, []);
+
   const refreshAllData = useCallback(async () => {
+    setIsCasesLoading(true);
+    setCasesError(null);
     try {
       const [
         healthRes,
@@ -110,8 +132,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (healthRes.status === 'fulfilled') {
         setSystemHealth(healthRes.value);
       }
-      if (casesRes.status === 'fulfilled' && casesRes.value.cases) {
-        setCases(casesRes.value.cases);
+      if (casesRes.status === 'fulfilled') {
+        if (casesRes.value.error) {
+          setCasesError(casesRes.value.error);
+        } else {
+          setCases(casesRes.value.cases);
+        }
       }
       if (camerasRes.status === 'fulfilled' && camerasRes.value.cameras) {
         setCameraSources(camerasRes.value.cameras);
@@ -133,6 +159,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }
     } catch {
       // Ignore network errors on initial mount; specific services handle errors
+    } finally {
+      setIsCasesLoading(false);
     }
   }, []);
 
@@ -304,7 +332,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         rejectCase,
         addNewCapturedCase,
         addCameraSource,
-        refreshAllData
+        refreshAllData,
+        isCasesLoading,
+        casesError,
+        refreshCases
       }}
     >
       {children}

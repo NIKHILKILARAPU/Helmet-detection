@@ -240,6 +240,22 @@ class ViolationsService {
     }
     return newCase;
   }
+
+  async reconcileCyclists(): Promise<{ success: boolean; reconciledCount: number; message?: string }> {
+    const res = await apiClient.post<any>('/violations/reconcile-cyclists', {});
+    if (res.success && res.data) {
+      return {
+        success: true,
+        reconciledCount: res.data.reconciledCount || 0,
+        message: res.message
+      };
+    }
+    return {
+      success: false,
+      reconciledCount: 0,
+      message: res.error || 'Failed to reconcile historical cyclist records.'
+    };
+  }
 }
 
 export const violationsService = new ViolationsService();

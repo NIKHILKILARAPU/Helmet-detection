@@ -499,7 +499,7 @@ class TestRoboflowApiIntegration:
 
     def test_roboflow_analyze_without_helmet_queues_pending_review(self, auth_headers):
         """
-        Simulates remote Roboflow detecting 'Without Helmet'.
+        Simulates remote Roboflow detecting 'Without Helmet' on a motorcycle.
         Must return structured violation and persist case as PENDING_REVIEW in MongoDB.
         """
         mock_resp = httpx.Response(
@@ -517,7 +517,16 @@ class TestRoboflowApiIntegration:
                         "confidence": 0.952,
                         "class": "Without Helmet",
                         "class_id": 1,
-                    }
+                    },
+                    {
+                        "x": 320.0,
+                        "y": 280.0,
+                        "width": 160.0,
+                        "height": 180.0,
+                        "confidence": 0.93,
+                        "class": "motorcycle",
+                        "class_id": 3,
+                    },
                 ],
             },
             request=httpx.Request("POST", "https://detect.roboflow.com/helmet-and-no-helmet-rider-detection/6"),
@@ -547,7 +556,7 @@ class TestRoboflowApiIntegration:
 
         payload = data["data"]
         assert payload["detected"] is True
-        assert payload["totalDetections"] == 1
+        assert payload["totalDetections"] == 2
         assert payload["helmetClassificationAvailable"] is True
         assert payload["isCandidateViolation"] is True
         assert payload["violationType"] == "NO_HELMET_RIDER"
@@ -594,7 +603,16 @@ class TestRoboflowApiIntegration:
                         "confidence": 0.945,
                         "class": "Without Helmet",
                         "class_id": 1,
-                    }
+                    },
+                    {
+                        "x": 320.0,
+                        "y": 280.0,
+                        "width": 160.0,
+                        "height": 180.0,
+                        "confidence": 0.93,
+                        "class": "motorcycle",
+                        "class_id": 3,
+                    },
                 ]
             },
             request=httpx.Request("POST", "https://detect.roboflow.com/helmet-and-no-helmet-rider-detection/6"),
@@ -824,7 +842,16 @@ class TestRoboflowApiIntegration:
                         "confidence": 0.92,
                         "class": "Without Helmet",
                         "class_id": 1,
-                    }
+                    },
+                    {
+                        "x": 300.0,
+                        "y": 300.0,
+                        "width": 150.0,
+                        "height": 160.0,
+                        "confidence": 0.94,
+                        "class": "motorcycle",
+                        "class_id": 3,
+                    },
                 ]
             },
             request=httpx.Request("POST", "https://detect.roboflow.com/helmet-and-no-helmet-rider-detection/6"),
@@ -902,7 +929,16 @@ class TestRoboflowApiIntegration:
                         "confidence": 0.91,
                         "class": "Without Helmet",
                         "class_id": 1,
-                    }
+                    },
+                    {
+                        "x": 300.0,
+                        "y": 300.0,
+                        "width": 150.0,
+                        "height": 160.0,
+                        "confidence": 0.94,
+                        "class": "motorcycle",
+                        "class_id": 3,
+                    },
                 ]
             },
             request=httpx.Request("POST", "https://detect.roboflow.com/helmet-and-no-helmet-rider-detection/6"),
@@ -1055,7 +1091,16 @@ class TestDistinctRiderAndPlateMatchingPipeline:
                         "confidence": 0.91,
                         "class": "Without Helmet",
                         "class_id": 1,
-                    }
+                    },
+                    {
+                        "x": 160.0,
+                        "y": 180.0,
+                        "width": 120.0,
+                        "height": 100.0,
+                        "confidence": 0.92,
+                        "class": "motorcycle",
+                        "class_id": 3,
+                    },
                 ]
             },
             request=httpx.Request("POST", "https://detect.roboflow.com/test"),
@@ -1115,6 +1160,24 @@ class TestDistinctRiderAndPlateMatchingPipeline:
                         "class": "Without Helmet",
                         "class_id": 1,
                     },
+                    {
+                        "x": 100.0,
+                        "y": 180.0,
+                        "width": 80.0,
+                        "height": 100.0,
+                        "confidence": 0.94,
+                        "class": "motorcycle",
+                        "class_id": 3,
+                    },
+                    {
+                        "x": 220.0,
+                        "y": 180.0,
+                        "width": 80.0,
+                        "height": 100.0,
+                        "confidence": 0.91,
+                        "class": "motorcycle",
+                        "class_id": 3,
+                    },
                 ]
             },
             request=httpx.Request("POST", "https://detect.roboflow.com/test"),
@@ -1165,7 +1228,16 @@ class TestDistinctRiderAndPlateMatchingPipeline:
                         "confidence": 0.90,
                         "class": "Without Helmet",
                         "class_id": 1,
-                    }
+                    },
+                    {
+                        "x": 150.0,
+                        "y": 180.0,
+                        "width": 100.0,
+                        "height": 100.0,
+                        "confidence": 0.92,
+                        "class": "motorcycle",
+                        "class_id": 3,
+                    },
                 ]
             },
             request=httpx.Request("POST", "https://detect.roboflow.com/test"),
@@ -1209,6 +1281,15 @@ class TestDistinctRiderAndPlateMatchingPipeline:
                         "confidence": 0.90,
                         "class": "Without Helmet",
                         "class_id": 1,
+                    },
+                    {
+                        "x": 150.0,
+                        "y": 170.0,
+                        "width": 100.0,
+                        "height": 100.0,
+                        "confidence": 0.92,
+                        "class": "motorcycle",
+                        "class_id": 3,
                     },
                     {
                         "x": 150.0,
@@ -1303,6 +1384,15 @@ class TestDistinctRiderAndPlateMatchingPipeline:
                             "confidence": 0.92,
                             "class": "Without Helmet",
                             "class_id": 1,
+                        },
+                        {
+                            "x": 150.0,
+                            "y": 170.0,
+                            "width": 100.0,
+                            "height": 100.0,
+                            "confidence": 0.92,
+                            "class": "motorcycle",
+                            "class_id": 3,
                         },
                         {
                             "x": 150.0,
@@ -1676,6 +1766,42 @@ class TestAuditAndRobustnessImprovements:
                         "class": "With Helmet",
                         "class_id": 0,
                     },
+                    {
+                        "x": 100.0,
+                        "y": 160.0,
+                        "width": 70.0,
+                        "height": 80.0,
+                        "confidence": 0.94,
+                        "class": "motorcycle",
+                        "class_id": 3,
+                    },
+                    {
+                        "x": 200.0,
+                        "y": 160.0,
+                        "width": 70.0,
+                        "height": 80.0,
+                        "confidence": 0.92,
+                        "class": "motorcycle",
+                        "class_id": 3,
+                    },
+                    {
+                        "x": 300.0,
+                        "y": 160.0,
+                        "width": 70.0,
+                        "height": 80.0,
+                        "confidence": 0.91,
+                        "class": "motorcycle",
+                        "class_id": 3,
+                    },
+                    {
+                        "x": 400.0,
+                        "y": 160.0,
+                        "width": 70.0,
+                        "height": 80.0,
+                        "confidence": 0.89,
+                        "class": "motorcycle",
+                        "class_id": 3,
+                    },
                 ]
             },
             request=httpx.Request("POST", "https://detect.roboflow.com/test"),
@@ -1782,6 +1908,10 @@ class TestIndividualRiderCasesAndFallbackPipeline:
                     {"x": 240.0, "y": 150.0, "width": 80.0, "height": 100.0, "confidence": 0.92, "class": "Without Helmet", "class_id": 1},
                     {"x": 380.0, "y": 150.0, "width": 80.0, "height": 100.0, "confidence": 0.89, "class": "Without Helmet", "class_id": 1},
                     {"x": 520.0, "y": 150.0, "width": 80.0, "height": 100.0, "confidence": 0.86, "class": "Without Helmet", "class_id": 1},
+                    {"x": 100.0, "y": 250.0, "width": 100.0, "height": 150.0, "confidence": 0.94, "class": "motorcycle", "class_id": 3},
+                    {"x": 240.0, "y": 250.0, "width": 100.0, "height": 150.0, "confidence": 0.92, "class": "motorcycle", "class_id": 3},
+                    {"x": 380.0, "y": 250.0, "width": 100.0, "height": 150.0, "confidence": 0.90, "class": "motorcycle", "class_id": 3},
+                    {"x": 520.0, "y": 250.0, "width": 100.0, "height": 150.0, "confidence": 0.88, "class": "motorcycle", "class_id": 3},
                 ]
             },
             request=httpx.Request("POST", "https://detect.roboflow.com/test"),
@@ -1824,6 +1954,8 @@ class TestIndividualRiderCasesAndFallbackPipeline:
                 "predictions": [
                     {"x": 200.0, "y": 150.0, "width": 80.0, "height": 100.0, "confidence": 0.94, "class": "Without Helmet", "class_id": 1},
                     {"x": 350.0, "y": 150.0, "width": 80.0, "height": 100.0, "confidence": 0.96, "class": "With Helmet", "class_id": 0},
+                    {"x": 200.0, "y": 250.0, "width": 100.0, "height": 150.0, "confidence": 0.94, "class": "motorcycle", "class_id": 3},
+                    {"x": 350.0, "y": 250.0, "width": 100.0, "height": 150.0, "confidence": 0.93, "class": "motorcycle", "class_id": 3},
                     {"x": 280.0, "y": 300.0, "width": 60.0, "height": 25.0, "confidence": 0.90, "class": "licence", "class_id": 2},
                 ]
             },
@@ -1988,6 +2120,7 @@ class TestIndividualRiderCasesAndFallbackPipeline:
                 "predictions": [
                     {"x": 200.0, "y": 150.0, "width": 80.0, "height": 100.0, "confidence": 0.94, "class": "Without Helmet", "class_id": 1},
                     {"x": 204.0, "y": 152.0, "width": 78.0, "height": 98.0, "confidence": 0.82, "class": "Without Helmet", "class_id": 1},
+                    {"x": 200.0, "y": 250.0, "width": 100.0, "height": 150.0, "confidence": 0.92, "class": "motorcycle", "class_id": 3},
                 ]
             },
             request=httpx.Request("POST", "https://detect.roboflow.com/test"),
@@ -2020,6 +2153,8 @@ class TestIndividualRiderCasesAndFallbackPipeline:
                 "predictions": [
                     {"x": 180.0, "y": 150.0, "width": 75.0, "height": 95.0, "confidence": 0.93, "class": "Without Helmet", "class_id": 1},
                     {"x": 265.0, "y": 150.0, "width": 75.0, "height": 95.0, "confidence": 0.89, "class": "Without Helmet", "class_id": 1},
+                    {"x": 180.0, "y": 250.0, "width": 90.0, "height": 140.0, "confidence": 0.93, "class": "motorcycle", "class_id": 3},
+                    {"x": 265.0, "y": 250.0, "width": 90.0, "height": 140.0, "confidence": 0.91, "class": "motorcycle", "class_id": 3},
                 ]
             },
             request=httpx.Request("POST", "https://detect.roboflow.com/test"),
@@ -2050,6 +2185,7 @@ class TestIndividualRiderCasesAndFallbackPipeline:
             json={
                 "predictions": [
                     {"x": 200.0, "y": 150.0, "width": 80.0, "height": 100.0, "confidence": 0.94, "class": "Without Helmet", "class_id": 1},
+                    {"x": 200.0, "y": 250.0, "width": 100.0, "height": 150.0, "confidence": 0.92, "class": "motorcycle", "class_id": 3},
                 ]
             },
             request=httpx.Request("POST", "https://detect.roboflow.com/test"),
@@ -2088,6 +2224,7 @@ class TestIndividualRiderCasesAndFallbackPipeline:
             json={
                 "predictions": [
                     {"x": 200.0, "y": 150.0, "width": 80.0, "height": 100.0, "confidence": 0.94, "class": "Without Helmet", "class_id": 1},
+                    {"x": 200.0, "y": 250.0, "width": 100.0, "height": 150.0, "confidence": 0.92, "class": "motorcycle", "class_id": 3},
                 ]
             },
             request=httpx.Request("POST", "https://detect.roboflow.com/test"),
@@ -2110,6 +2247,7 @@ class TestIndividualRiderCasesAndFallbackPipeline:
             json={
                 "predictions": [
                     {"x": 210.0, "y": 155.0, "width": 80.0, "height": 100.0, "confidence": 0.92, "class": "Without Helmet", "class_id": 1},
+                    {"x": 210.0, "y": 255.0, "width": 100.0, "height": 150.0, "confidence": 0.91, "class": "motorcycle", "class_id": 3},
                 ]
             },
             request=httpx.Request("POST", "https://detect.roboflow.com/test"),
@@ -2138,6 +2276,8 @@ class TestIndividualRiderCasesAndFallbackPipeline:
                 "predictions": [
                     {"x": 180.0, "y": 150.0, "width": 75.0, "height": 95.0, "confidence": 0.93, "class": "Without Helmet", "class_id": 1},
                     {"x": 350.0, "y": 150.0, "width": 75.0, "height": 95.0, "confidence": 0.89, "class": "Without Helmet", "class_id": 1},
+                    {"x": 180.0, "y": 250.0, "width": 90.0, "height": 140.0, "confidence": 0.92, "class": "motorcycle", "class_id": 3},
+                    {"x": 350.0, "y": 250.0, "width": 90.0, "height": 140.0, "confidence": 0.90, "class": "motorcycle", "class_id": 3},
                 ]
             },
             request=httpx.Request("POST", "https://detect.roboflow.com/test"),
@@ -2228,6 +2368,526 @@ class TestIndividualRiderCasesAndFallbackPipeline:
                     headers=auth_headers,
                 )
             assert resp.status_code == 200
+
+
+class TestCyclistExclusionAndVehicleClassificationPipeline:
+    """
+    Exhaustive verification of cyclist exclusion, motorized vehicle requirement,
+    spatial rider-vehicle association, uncertain vehicle handling, and mixed-traffic scenarios.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup_cyclist_tests(self):
+        db = get_db()
+        self.camera_oid = ObjectId("65f000000000000000000099")
+        db[COLLECTION_VIOLATIONS].delete_many({"cameraId": self.camera_oid})
+
+    def test_cyclist_without_helmet_produces_no_challan_candidate(self, auth_headers):
+        """Cyclist riding bicycle without helmet must be excluded and create zero violation cases."""
+        db = get_db()
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    {"x": 200.0, "y": 150.0, "width": 80.0, "height": 100.0, "confidence": 0.94, "class": "Without Helmet", "class_id": 1},
+                    {"x": 200.0, "y": 250.0, "width": 100.0, "height": 150.0, "confidence": 0.91, "class": "bicycle", "class_id": 4},
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=640, height=480)
+        files = {"file": ("cyclist_frame.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {"camera_id": str(self.camera_oid), "cooldown_seconds": "0"}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                data=form_data,
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["isCandidateViolation"] is False
+        assert data["status"] == "NO_VIOLATION"
+        assert len(data["cases"]) == 0
+
+        # Verify rider classification and exclusion traceability
+        assert len(data["riders"]) == 1
+        rider = data["riders"][0]
+        assert rider["classification"] == "WITHOUT_HELMET"
+        assert rider["vehicleType"] == "BICYCLE"
+        assert rider["eligibleForChallan"] is False
+        assert rider["exclusionReason"] == "BICYCLE_EXCLUDED"
+        assert rider["isViolation"] is False
+
+        # Zero documents in MongoDB
+        assert db[COLLECTION_VIOLATIONS].count_documents({"cameraId": self.camera_oid}) == 0
+
+    def test_no_helmet_motorcycle_rider_produces_one_pending_case(self, auth_headers):
+        """Motorcycle rider without helmet must be eligible and produce one PENDING_REVIEW candidate case."""
+        db = get_db()
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    {"x": 220.0, "y": 140.0, "width": 80.0, "height": 100.0, "confidence": 0.95, "class": "Without Helmet", "class_id": 1},
+                    {"x": 220.0, "y": 240.0, "width": 110.0, "height": 150.0, "confidence": 0.93, "class": "motorcycle", "class_id": 3},
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=640, height=480)
+        files = {"file": ("moto_rider_frame.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {"camera_id": str(self.camera_oid), "cooldown_seconds": "0"}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                data=form_data,
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["isCandidateViolation"] is True
+        assert data["status"] == "PENDING_REVIEW"
+        assert len(data["cases"]) == 1
+
+        case = data["cases"][0]
+        assert case["vehicleType"] == "MOTORCYCLE"
+        assert case["status"] == "PENDING_REVIEW"
+
+        rider = data["riders"][0]
+        assert rider["classification"] == "WITHOUT_HELMET"
+        assert rider["vehicleType"] == "MOTORCYCLE"
+        assert rider["eligibleForChallan"] is True
+        assert rider["exclusionReason"] is None
+        assert rider["isViolation"] is True
+
+        # Exactly 1 MongoDB violation document
+        doc = db[COLLECTION_VIOLATIONS].find_one({"caseId": case["caseId"]})
+        assert doc is not None
+        assert doc["status"] == "PENDING_REVIEW"
+        assert doc["riderDetails"]["vehicleType"] == "MOTORCYCLE"
+        assert doc["riderDetails"]["eligibleForChallan"] is True
+
+    def test_helmeted_motorcycle_rider_produces_none(self, auth_headers):
+        """Motorcycle rider with helmet must be compliant and create zero violation cases."""
+        db = get_db()
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    {"x": 200.0, "y": 150.0, "width": 80.0, "height": 100.0, "confidence": 0.96, "class": "With Helmet", "class_id": 0},
+                    {"x": 200.0, "y": 250.0, "width": 100.0, "height": 150.0, "confidence": 0.93, "class": "motorcycle", "class_id": 3},
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=640, height=480)
+        files = {"file": ("compliant_moto.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {"camera_id": str(self.camera_oid), "cooldown_seconds": "0"}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                data=form_data,
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["isCandidateViolation"] is False
+        assert data["status"] == "NO_VIOLATION"
+        assert len(data["cases"]) == 0
+
+        rider = data["riders"][0]
+        assert rider["classification"] == "WITH_HELMET"
+        assert rider["vehicleType"] == "MOTORCYCLE"
+        assert rider["eligibleForChallan"] is False
+        assert rider["exclusionReason"] == "HELMET_COMPLIANT"
+        assert rider["isViolation"] is False
+
+        assert db[COLLECTION_VIOLATIONS].count_documents({"cameraId": self.camera_oid}) == 0
+
+    def test_image_with_cyclist_and_two_motorcycle_riders_only_creates_eligible_cases(self, auth_headers):
+        """Mixed frame: 1 unhelmeted cyclist, 1 unhelmeted motorcyclist, 1 helmeted motorcyclist. Only the unhelmeted motorcyclist generates a case."""
+        db = get_db()
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    # 1. Cyclist without helmet (left)
+                    {"x": 100.0, "y": 140.0, "width": 70.0, "height": 90.0, "confidence": 0.94, "class": "Without Helmet", "class_id": 1},
+                    {"x": 100.0, "y": 240.0, "width": 90.0, "height": 130.0, "confidence": 0.90, "class": "bicycle", "class_id": 4},
+                    # 2. Motorcycle rider without helmet (center)
+                    {"x": 300.0, "y": 140.0, "width": 75.0, "height": 90.0, "confidence": 0.92, "class": "Without Helmet", "class_id": 1},
+                    {"x": 300.0, "y": 240.0, "width": 100.0, "height": 140.0, "confidence": 0.93, "class": "motorcycle", "class_id": 3},
+                    # 3. Motorcycle rider with helmet (right)
+                    {"x": 500.0, "y": 140.0, "width": 75.0, "height": 90.0, "confidence": 0.95, "class": "With Helmet", "class_id": 0},
+                    {"x": 500.0, "y": 240.0, "width": 100.0, "height": 140.0, "confidence": 0.92, "class": "motorcycle", "class_id": 3},
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=640, height=480)
+        files = {"file": ("mixed_traffic.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {"camera_id": str(self.camera_oid), "cooldown_seconds": "0"}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                data=form_data,
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert len(data["riders"]) == 3
+        assert data["isCandidateViolation"] is True
+        # ONLY 1 eligible case generated!
+        assert len(data["cases"]) == 1
+
+        # Check each rider's state
+        cyclist = [r for r in data["riders"] if r["bbox"][0] < 200][0]
+        assert cyclist["vehicleType"] == "BICYCLE"
+        assert cyclist["eligibleForChallan"] is False
+        assert cyclist["exclusionReason"] == "BICYCLE_EXCLUDED"
+
+        unhelmeted_moto = [r for r in data["riders"] if 200 <= r["bbox"][0] < 400][0]
+        assert unhelmeted_moto["vehicleType"] == "MOTORCYCLE"
+        assert unhelmeted_moto["eligibleForChallan"] is True
+        assert unhelmeted_moto["isViolation"] is True
+
+        helmeted_moto = [r for r in data["riders"] if r["bbox"][0] >= 400][0]
+        assert helmeted_moto["vehicleType"] == "MOTORCYCLE"
+        assert helmeted_moto["eligibleForChallan"] is False
+        assert helmeted_moto["exclusionReason"] == "HELMET_COMPLIANT"
+
+        # Exactly 1 document in DB for the unhelmeted motorcyclist
+        assert db[COLLECTION_VIOLATIONS].count_documents({"cameraId": self.camera_oid}) == 1
+        db_doc = db[COLLECTION_VIOLATIONS].find_one({"cameraId": self.camera_oid})
+        assert db_doc["caseId"] == data["cases"][0]["caseId"]
+        assert db_doc["riderDetails"]["vehicleType"] == "MOTORCYCLE"
+
+    def test_multiple_cyclists_produce_no_cases(self, auth_headers):
+        """Multiple cyclists without helmets in the same image produce zero violation cases."""
+        db = get_db()
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    {"x": 120.0, "y": 150.0, "width": 70.0, "height": 90.0, "confidence": 0.93, "class": "Without Helmet", "class_id": 1},
+                    {"x": 120.0, "y": 250.0, "width": 80.0, "height": 130.0, "confidence": 0.90, "class": "bicycle", "class_id": 4},
+                    {"x": 280.0, "y": 150.0, "width": 70.0, "height": 90.0, "confidence": 0.91, "class": "Without Helmet", "class_id": 1},
+                    {"x": 280.0, "y": 250.0, "width": 80.0, "height": 130.0, "confidence": 0.88, "class": "bicycle", "class_id": 4},
+                    {"x": 450.0, "y": 150.0, "width": 70.0, "height": 90.0, "confidence": 0.89, "class": "Without Helmet", "class_id": 1},
+                    {"x": 450.0, "y": 250.0, "width": 80.0, "height": 130.0, "confidence": 0.92, "class": "bicycle", "class_id": 4},
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=640, height=480)
+        files = {"file": ("three_cyclists.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {"camera_id": str(self.camera_oid), "cooldown_seconds": "0"}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                data=form_data,
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert len(data["riders"]) == 3
+        assert data["isCandidateViolation"] is False
+        assert data["status"] == "NO_VIOLATION"
+        assert len(data["cases"]) == 0
+
+        for r in data["riders"]:
+            assert r["vehicleType"] == "BICYCLE"
+            assert r["eligibleForChallan"] is False
+            assert r["exclusionReason"] == "BICYCLE_EXCLUDED"
+
+        assert db[COLLECTION_VIOLATIONS].count_documents({"cameraId": self.camera_oid}) == 0
+
+    def test_uncertain_vehicle_type_does_not_create_automatic_case(self, auth_headers):
+        """Uncertain vehicle type must NOT create automatic violation case; returns status NEEDS_MANUAL_REVIEW."""
+        db = get_db()
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    # Rider without helmet, but NO vehicle box detected in the frame
+                    {"x": 200.0, "y": 150.0, "width": 80.0, "height": 100.0, "confidence": 0.94, "class": "Without Helmet", "class_id": 1},
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=640, height=480)
+        files = {"file": ("uncertain_veh.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {"camera_id": str(self.camera_oid), "cooldown_seconds": "0"}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                data=form_data,
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert len(data["riders"]) == 1
+        rider = data["riders"][0]
+        assert rider["vehicleType"] == "UNCERTAIN"
+        assert rider["eligibleForChallan"] is False
+        assert rider["exclusionReason"] == "UNCERTAIN_VEHICLE_TYPE"
+        assert rider["isViolation"] is False
+
+        # Non-challan status: NEEDS_MANUAL_REVIEW
+        assert data["isCandidateViolation"] is False
+        assert data["status"] == "NEEDS_MANUAL_REVIEW"
+        assert len(data["cases"]) == 0
+        assert db[COLLECTION_VIOLATIONS].count_documents({"cameraId": self.camera_oid}) == 0
+
+    def test_bicycle_presence_does_not_filter_unrelated_motorcycle_riders(self, auth_headers):
+        """The presence of bicycles in the frame must NOT filter or suppress unrelated motorcycle riders."""
+        db = get_db()
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    # Bicycle 1 (without helmet)
+                    {"x": 100.0, "y": 140.0, "width": 70.0, "height": 90.0, "confidence": 0.92, "class": "Without Helmet", "class_id": 1},
+                    {"x": 100.0, "y": 240.0, "width": 80.0, "height": 130.0, "confidence": 0.91, "class": "bicycle", "class_id": 4},
+                    # Motorcycle 1 (without helmet)
+                    {"x": 260.0, "y": 140.0, "width": 75.0, "height": 90.0, "confidence": 0.94, "class": "Without Helmet", "class_id": 1},
+                    {"x": 260.0, "y": 240.0, "width": 100.0, "height": 140.0, "confidence": 0.93, "class": "motorcycle", "class_id": 3},
+                    # Bicycle 2 (with helmet)
+                    {"x": 420.0, "y": 140.0, "width": 70.0, "height": 90.0, "confidence": 0.95, "class": "With Helmet", "class_id": 0},
+                    {"x": 420.0, "y": 240.0, "width": 80.0, "height": 130.0, "confidence": 0.89, "class": "bicycle", "class_id": 4},
+                    # Motorcycle 2 (without helmet)
+                    {"x": 560.0, "y": 140.0, "width": 75.0, "height": 90.0, "confidence": 0.90, "class": "Without Helmet", "class_id": 1},
+                    {"x": 560.0, "y": 240.0, "width": 100.0, "height": 140.0, "confidence": 0.91, "class": "motorcycle", "class_id": 3},
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=640, height=480)
+        files = {"file": ("dense_mixed_traffic.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {"camera_id": str(self.camera_oid), "cooldown_seconds": "0"}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                data=form_data,
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert len(data["riders"]) == 4
+        assert data["isCandidateViolation"] is True
+        # Exactly 2 motorcycle violation cases created despite presence of 2 bicycles!
+        assert len(data["cases"]) == 2
+
+        case_ids = [c["caseId"] for c in data["cases"]]
+        assert len(set(case_ids)) == 2
+        for c in data["cases"]:
+            assert c["vehicleType"] == "MOTORCYCLE"
+            assert c["status"] == "PENDING_REVIEW"
+
+        # Database contains exactly the 2 motorcycle candidate cases
+        assert db[COLLECTION_VIOLATIONS].count_documents({"cameraId": self.camera_oid}) == 2
+        db_docs = list(db[COLLECTION_VIOLATIONS].find({"cameraId": self.camera_oid}))
+        for doc in db_docs:
+            assert doc["riderDetails"]["vehicleType"] == "MOTORCYCLE"
+            assert doc["riderDetails"]["eligibleForChallan"] is True
+            assert doc["status"] == "PENDING_REVIEW"
+
+    def test_bicycle_rider_with_helmet_produces_no_eligible_cases(self, auth_headers):
+        """A bicycle rider with helmet must be excluded and create no candidate challan cases."""
+        db = get_db()
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    {"x": 150.0, "y": 140.0, "width": 70.0, "height": 90.0, "confidence": 0.96, "class": "With Helmet", "class_id": 0},
+                    {"x": 150.0, "y": 240.0, "width": 80.0, "height": 130.0, "confidence": 0.91, "class": "bicycle", "class_id": 4},
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=640, height=480)
+        files = {"file": ("helmeted_cyclist.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {"camera_id": str(self.camera_oid), "cooldown_seconds": "0"}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                data=form_data,
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["isCandidateViolation"] is False
+        assert data["status"] == "NO_VIOLATION"
+        assert len(data["cases"]) == 0
+        assert len(data["riders"]) == 1
+        rider = data["riders"][0]
+        assert rider["vehicleType"] == "BICYCLE"
+        assert rider["eligibleForChallan"] is False
+        assert rider["isViolation"] is False
+        assert db[COLLECTION_VIOLATIONS].count_documents({"cameraId": self.camera_oid}) == 0
+
+    def test_one_cyclist_and_two_unhelmeted_motorcyclists_creates_exactly_two_cases(self, auth_headers):
+        """Frame with 1 unhelmeted cyclist and 2 unhelmeted motorcyclists creates exactly 2 motorcycle cases."""
+        db = get_db()
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    # Cyclist without helmet (left)
+                    {"x": 100.0, "y": 140.0, "width": 70.0, "height": 90.0, "confidence": 0.93, "class": "Without Helmet", "class_id": 1},
+                    {"x": 100.0, "y": 240.0, "width": 80.0, "height": 130.0, "confidence": 0.90, "class": "bicycle", "class_id": 4},
+                    # Motorcyclist 1 without helmet (center)
+                    {"x": 280.0, "y": 140.0, "width": 75.0, "height": 90.0, "confidence": 0.95, "class": "Without Helmet", "class_id": 1},
+                    {"x": 280.0, "y": 240.0, "width": 100.0, "height": 140.0, "confidence": 0.93, "class": "motorcycle", "class_id": 3},
+                    # Motorcyclist 2 without helmet (right)
+                    {"x": 480.0, "y": 140.0, "width": 75.0, "height": 90.0, "confidence": 0.92, "class": "Without Helmet", "class_id": 1},
+                    {"x": 480.0, "y": 240.0, "width": 100.0, "height": 140.0, "confidence": 0.91, "class": "motorcycle", "class_id": 3},
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=640, height=480)
+        files = {"file": ("cyclist_and_two_motos.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {"camera_id": str(self.camera_oid), "cooldown_seconds": "0"}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                data=form_data,
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert len(data["riders"]) == 3
+        assert data["isCandidateViolation"] is True
+        assert len(data["cases"]) == 2
+
+        # Verify cyclist is excluded and motorcycle riders have cases
+        cyclist = next(r for r in data["riders"] if r["bbox"][0] < 180)
+        assert cyclist["vehicleType"] == "BICYCLE"
+        assert cyclist["eligibleForChallan"] is False
+        assert cyclist["exclusionReason"] == "BICYCLE_EXCLUDED"
+
+        for case in data["cases"]:
+            assert case["vehicleType"] == "MOTORCYCLE"
+            assert case["status"] == "PENDING_REVIEW"
+
+        assert db[COLLECTION_VIOLATIONS].count_documents({"cameraId": self.camera_oid}) == 2
+
+    def test_nearby_bicycle_and_motorcycle_spatial_association(self, auth_headers):
+        """When a bicycle and motorcycle are in proximity, rider centered over the bicycle associates with bicycle."""
+        db = get_db()
+        # Rider centered at x=150, bicycle centered at x=150, motorcycle adjacent at x=210
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    {"x": 150.0, "y": 140.0, "width": 60.0, "height": 90.0, "confidence": 0.94, "class": "Without Helmet", "class_id": 1},
+                    {"x": 150.0, "y": 240.0, "width": 70.0, "height": 130.0, "confidence": 0.90, "class": "bicycle", "class_id": 4},
+                    {"x": 240.0, "y": 240.0, "width": 100.0, "height": 140.0, "confidence": 0.92, "class": "motorcycle", "class_id": 3},
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=640, height=480)
+        files = {"file": ("proximity_test.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {"camera_id": str(self.camera_oid), "cooldown_seconds": "0"}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                data=form_data,
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert len(data["riders"]) == 1
+        rider = data["riders"][0]
+        # Must correctly associate with the centered BICYCLE and exclude from challan
+        assert rider["vehicleType"] == "BICYCLE"
+        assert rider["eligibleForChallan"] is False
+        assert rider["exclusionReason"] == "BICYCLE_EXCLUDED"
+        assert len(data["cases"]) == 0
+        assert db[COLLECTION_VIOLATIONS].count_documents({"cameraId": self.camera_oid}) == 0
+
+    def test_competing_overlapping_vehicles_resolves_to_uncertain(self, auth_headers):
+        """When competing bicycle and motorcycle boxes have near-identical overlap, fails safely to UNCERTAIN."""
+        db = get_db()
+        # Rider centered at x=200, bicycle centered at x=195, motorcycle centered at x=205 (ambiguous)
+        mock_resp = httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    {"x": 200.0, "y": 140.0, "width": 70.0, "height": 90.0, "confidence": 0.94, "class": "Without Helmet", "class_id": 1},
+                    {"x": 195.0, "y": 240.0, "width": 80.0, "height": 130.0, "confidence": 0.88, "class": "bicycle", "class_id": 4},
+                    {"x": 205.0, "y": 240.0, "width": 85.0, "height": 130.0, "confidence": 0.89, "class": "motorcycle", "class_id": 3},
+                ]
+            },
+            request=httpx.Request("POST", "https://detect.roboflow.com/test"),
+        )
+        img_bytes = _create_test_image_bytes(width=640, height=480)
+        files = {"file": ("competing_vehicles.jpg", io.BytesIO(img_bytes), "image/jpeg")}
+        form_data = {"camera_id": str(self.camera_oid), "cooldown_seconds": "0"}
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            resp = client.post(
+                f"{settings.API_PREFIX}/detections/analyze",
+                files=files,
+                data=form_data,
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert len(data["riders"]) == 1
+        rider = data["riders"][0]
+        assert rider["vehicleType"] == "UNCERTAIN"
+        assert rider["eligibleForChallan"] is False
+        assert rider["exclusionReason"] == "UNCERTAIN_VEHICLE_TYPE"
+        assert data["status"] == "NEEDS_MANUAL_REVIEW"
+        assert len(data["cases"]) == 0
+        assert db[COLLECTION_VIOLATIONS].count_documents({"cameraId": self.camera_oid}) == 0
+
 
 
 

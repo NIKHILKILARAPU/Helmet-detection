@@ -35,13 +35,23 @@ class RiderDetectionModel(BaseModel):
     Never used for biometric/facial recognition or automated identity inference.
     """
     detectionId: str = Field(..., description="Stable rider detection identifier (e.g. rider-1)")
+    caseId: Optional[str] = Field(default=None, description="Linked individual candidate case ID if ingested")
     label: str = Field(..., description="Raw model class label (e.g. 'Without Helmet', 'With Helmet')")
     classification: str = Field(..., description="Normalized classification: 'WITHOUT_HELMET', 'WITH_HELMET', or 'UNKNOWN'")
     confidence: float = Field(..., ge=0.0, le=1.0, description="Model prediction confidence")
     bbox: List[float] = Field(..., description="Bounding box pixel coordinates [x1, y1, x2, y2]")
     normalized: List[float] = Field(..., description="Consistent normalized coordinates [x1, y1, x2, y2] (range 0.0 - 1.0)")
     cropPath: Optional[str] = Field(None, description="Storage URI to cropped rider evidence image")
-    isViolation: bool = Field(..., description="True if rider is without helmet")
+    isViolation: bool = Field(..., description="True if rider is without helmet and eligible for challan")
+    vehicleType: Optional[str] = Field(default="UNKNOWN", description="Associated vehicle type: 'MOTORCYCLE', 'BICYCLE', 'UNCERTAIN', etc.")
+    vehicleConfidence: Optional[float] = Field(default=None, description="Vehicle classification confidence")
+    vehicleBbox: Optional[List[float]] = Field(default=None, description="Bounding box of associated vehicle")
+    associationScore: Optional[float] = Field(default=None, description="Rider to vehicle spatial association score")
+    eligibleForChallan: bool = Field(default=False, description="True if rider is on a motorized two-wheeler and Without Helmet")
+    exclusionReason: Optional[str] = Field(default=None, description="Reason if excluded from challan creation (e.g. 'BICYCLE_EXCLUDED', 'UNCERTAIN_VEHICLE_TYPE')")
+    helmetClass: Optional[str] = Field(default=None, description="Detected helmet classification label")
+    helmetConfidence: Optional[float] = Field(default=None, description="Helmet classification confidence")
+    reviewStatus: Optional[str] = Field(default=None, description="Diagnostic triage review status (e.g. PENDING_REVIEW, EXCLUDED_BICYCLE)")
 
 
 class PlateMatchResult(BaseModel):
@@ -80,6 +90,13 @@ class IngestedCaseSummary(BaseModel):
     bbox: List[float] = Field(..., description="Bounding box pixel coordinates [x1, y1, x2, y2]")
     normalized: List[float] = Field(..., description="Normalized coordinates [x1, y1, x2, y2]")
     isDeduplicated: bool = Field(default=False, description="True if this specific rider case was deduplicated")
+    vehicleType: Optional[str] = Field(default="MOTORCYCLE", description="Associated vehicle classification")
+    vehicleConfidence: Optional[float] = Field(default=None, description="Vehicle classification confidence")
+    vehicleBbox: Optional[List[float]] = Field(default=None, description="Bounding box of associated vehicle")
+    associationScore: Optional[float] = Field(default=None, description="Rider to vehicle spatial association score")
+    eligibleForChallan: bool = Field(default=True, description="Challan eligibility flag")
+    exclusionReason: Optional[str] = Field(default=None, description="Exclusion cause if ineligible")
+    reviewStatus: Optional[str] = Field(default="PENDING_REVIEW", description="Diagnostic review triage status")
 
 
 class DetectionAnalysisResponse(BaseModel):

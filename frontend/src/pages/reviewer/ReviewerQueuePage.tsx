@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   CheckCircle2, 
   XCircle, 
@@ -9,7 +9,14 @@ import {
   History, 
   Check,
   Users,
-  Lock
+  Lock,
+  AlertCircle,
+  RefreshCw,
+  Loader2,
+  ImageIcon,
+  ShieldAlert,
+  Info,
+  Bike
 } from 'lucide-react';
 import { useApp } from '../../context';
 import type { ViolationStatus } from '../../types';
@@ -17,18 +24,23 @@ import { EvidenceViewer } from '../../components/common/EvidenceViewer';
 import { StatusBadge } from '../../components/common/StatusBadge';
 import { ConfirmationDialog } from '../../components/common/ConfirmationDialog';
 import { EmptyState } from '../../components/common/EmptyState';
+import { violationsService } from '../../services/violationsService';
 
 export const ReviewerQueuePage: React.FC = () => {
-  const { cases, approveDraft, rejectCase } = useApp();
+  const { cases, approveDraft, rejectCase, refreshCases, isCasesLoading, casesError } = useApp();
 
   const [activeTab, setActiveTab] = useState<ViolationStatus | 'ALL'>('PENDING_REVIEW');
-  const [selectedCaseId, setSelectedCaseId] = useState<string>(
-    cases.find(c => c.status === 'PENDING_REVIEW')?.id || cases[0]?.id || ''
-  );
+  const [selectedCaseId, setSelectedCaseId] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
   const [reviewerNotes, setReviewerNotes] = useState('');
   const [actionLoadingCaseId, setActionLoadingCaseId] = useState<string | null>(null);
-  
+  const [isReconciling, setIsReconciling] = useState(false);
+  const [reconcileResult, setReconcileResult] = useState<string | null>(null);
+
+  useEffect(() => {
+    refreshCases();
+  }, [refreshCases]);
+
   // Dialog state
   const [dialogState, setDialogState] = useState<{
     isOpen: boolean;
@@ -39,18 +51,44 @@ export const ReviewerQueuePage: React.FC = () => {
     type: 'APPROVE_DRAFT'
   });
 
-  // Filter cases
+  // Filter cases: enforce that BICYCLE cases never leak into PENDING_REVIEW queue
   const filteredCases = cases.filter(c => {
-    const matchesTab = activeTab === 'ALL' || c.status === activeTab;
+    let matchesTab = false;
+    if (activeTab === 'ALL') {
+      matchesTab = true;
+    } else if (activeTab === 'PENDING_REVIEW') {
+      const isCyclist = c.riderDetails?.vehicleType === 'BICYCLE' || c.riderDetails?.exclusionReason === 'BICYCLE_EXCLUDED';
+      matchesTab = c.status === 'PENDING_REVIEW' && !isCyclist;
+    } else {
+      matchesTab = c.status === activeTab;
+    }
+
+    const q = searchQuery.trim().toLowerCase();
+    const plate = c.linkedPerson?.vehiclePlate || c.plateMatch?.normalizedPlate || '';
     const matchesSearch = 
-      searchQuery.trim() === '' ||
-      c.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      c.camera.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (c.linkedPerson?.vehiclePlate.toLowerCase().includes(searchQuery.toLowerCase()));
+      q === '' ||
+      c.id.toLowerCase().includes(q) ||
+      (c.camera?.name && c.camera.name.toLowerCase().includes(q)) ||
+      plate.toLowerCase().includes(q);
+
     return matchesTab && matchesSearch;
   });
 
-  const activeCase = cases.find(c => c.id === selectedCaseId) || filteredCases[0] || null;
+  const activeCase = (selectedCaseId ? cases.find(c => c.id === selectedCaseId) : null) || filteredCases[0] || null;
+
+  const handleReconcileCyclists = async () => {
+    setIsReconciling(true);
+    setReconcileResult(null);
+    try {
+      const res = await violationsService.reconcileCyclists();
+      setReconcileResult(`Reconciled ${res.reconciledCount} historical cyclist case(s) to REJECTED status.`);
+      await refreshCases();
+    } catch (err: any) {
+      setReconcileResult(err?.message || 'Failed to reconcile cyclist records.');
+    } finally {
+      setIsReconciling(false);
+    }
+  };
 
   const handleOpenApproveDialog = () => {
     if (!activeCase || activeCase.status !== 'PENDING_REVIEW') return;
@@ -101,26 +139,86 @@ export const ReviewerQueuePage: React.FC = () => {
   return (
     <div className="space-y-4">
       {/* Reviewer Header & Guidance Notice */}
-      <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-            <FileCheck2 className="w-5 h-5 text-blue-600" />
-            Candidate Evidence Review &amp; Draft Verification Desk
-          </h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Human-in-the-loop verification under Section 129 Motor Vehicles Act. Approval creates a provisional draft only.
-          </p>
+      <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+              <FileCheck2 className="w-5 h-5 text-blue-600" />
+              Candidate Evidence Review &amp; Draft Verification Desk
+            </h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Human-in-the-loop verification under Section 129 Motor Vehicles Act. Approval creates a provisional draft only.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="font-semibold text-slate-700">Queue Metrics:</span>
+            <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-bold">
+              {cases.filter(c => c.status === 'PENDING_REVIEW' && c.riderDetails?.vehicleType !== 'BICYCLE' && c.riderDetails?.exclusionReason !== 'BICYCLE_EXCLUDED').length} Pending
+            </span>
+            <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 font-bold">
+              {cases.filter(c => c.status === 'DRAFT_CREATED').length} Drafts
+            </span>
+
+            <button
+              type="button"
+              onClick={() => refreshCases()}
+              disabled={isCasesLoading}
+              className="ml-2 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+              title="Refresh queue from server"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isCasesLoading ? 'animate-spin text-blue-600' : ''}`} />
+              <span>Refresh</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleReconcileCyclists}
+              disabled={isReconciling || isCasesLoading}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+              title="Audit and exclude historical bicycle records from active queue"
+            >
+              {isReconciling ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Bike className="w-3.5 h-3.5 text-amber-600" />
+              )}
+              <span>Reconcile Cyclists</span>
+            </button>
+          </div>
         </div>
 
-        <div className="flex items-center gap-2 text-xs">
-          <span className="font-semibold text-slate-700">Queue Metrics:</span>
-          <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-bold">
-            {cases.filter(c => c.status === 'PENDING_REVIEW').length} Pending
-          </span>
-          <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 font-bold">
-            {cases.filter(c => c.status === 'DRAFT_CREATED').length} Drafts
-          </span>
-        </div>
+        {casesError && (
+          <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-800 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+              <span>Failed to fetch latest violation cases: {casesError}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => refreshCases()}
+              className="px-2.5 py-1 bg-white border border-rose-300 rounded text-rose-800 font-semibold hover:bg-rose-100 cursor-pointer"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {reconcileResult && (
+          <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>{reconcileResult}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setReconcileResult(null)}
+              className="text-slate-400 hover:text-slate-600 font-bold"
+            >
+              ✕
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Main Review Workspace Layout: Left Queue List, Right Inspection Deck */}
@@ -195,7 +293,11 @@ export const ReviewerQueuePage: React.FC = () => {
                             alt={`Rider crop ${item.id}`}
                             className="w-10 h-10 rounded-md object-cover border border-rose-200 bg-slate-900 shrink-0"
                           />
-                        ) : null}
+                        ) : (
+                          <div className="w-10 h-10 rounded-md bg-slate-100 border border-slate-200 flex items-center justify-center shrink-0 text-slate-400">
+                            <ImageIcon className="w-5 h-5" />
+                          </div>
+                        )}
                         <div>
                           <div className="flex items-center gap-2">
                             <span className="font-mono font-bold text-xs text-slate-900">{item.id}</span>
@@ -222,9 +324,22 @@ export const ReviewerQueuePage: React.FC = () => {
                       <span className="font-medium text-slate-800 truncate max-w-[180px]">
                         {item.violationType.replace(/_/g, ' ')}
                       </span>
-                      <span className="font-mono text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded text-[11px]">
-                        {item.linkedPerson?.vehiclePlate || 'Unmatched'}
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        {item.riderDetails?.vehicleType && (
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium border ${
+                            item.riderDetails.vehicleType === 'MOTORCYCLE'
+                              ? 'bg-blue-50 text-blue-700 border-blue-200'
+                              : item.riderDetails.vehicleType === 'BICYCLE'
+                                ? 'bg-orange-50 text-orange-700 border-orange-200'
+                                : 'bg-amber-50 text-amber-700 border-amber-200'
+                          }`}>
+                            {item.riderDetails.vehicleType}
+                          </span>
+                        )}
+                        <span className="font-mono text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded text-[11px]">
+                          {item.linkedPerson?.vehiclePlate || (item.plateMatch?.normalizedPlate ? item.plateMatch.normalizedPlate : 'Unmatched')}
+                        </span>
+                      </div>
                     </div>
                   </div>
                 );
@@ -240,11 +355,27 @@ export const ReviewerQueuePage: React.FC = () => {
               {/* Top Case ID & Quick Meta */}
               <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200">
                 <div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <h3 className="text-base font-bold text-slate-900 font-mono">
                       {activeCase.id}
                     </h3>
                     <StatusBadge status={activeCase.status} size="md" />
+                    {activeCase.riderDetails?.vehicleType && (
+                      <span className={`text-xs px-2 py-0.5 rounded font-semibold border ${
+                        activeCase.riderDetails.vehicleType === 'MOTORCYCLE'
+                          ? 'bg-blue-50 text-blue-700 border-blue-200'
+                          : activeCase.riderDetails.vehicleType === 'BICYCLE'
+                            ? 'bg-orange-50 text-orange-700 border-orange-200'
+                            : 'bg-amber-50 text-amber-700 border-amber-200'
+                      }`}>
+                        Vehicle: {activeCase.riderDetails.vehicleType}
+                      </span>
+                    )}
+                    {activeCase.riderDetails?.exclusionReason && (
+                      <span className="text-xs px-2 py-0.5 rounded font-semibold bg-rose-50 text-rose-700 border border-rose-200">
+                        {activeCase.riderDetails.exclusionReason.replace(/_/g, ' ')}
+                      </span>
+                    )}
                   </div>
                   <div className="text-xs text-slate-500 mt-0.5">
                     Recorded by {activeCase.camera.name} ({activeCase.camera.location})
@@ -297,6 +428,84 @@ export const ReviewerQueuePage: React.FC = () => {
               {/* Evidence Viewer Stage with Bounding Boxes */}
               <EvidenceViewer caseData={activeCase} showDetails={true} />
 
+              {/* Rider Detection & Vehicle Diagnostics Panel */}
+              <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                    <ShieldAlert className="w-3.5 h-3.5 text-indigo-600" />
+                    Rider Detection &amp; Vehicle Diagnostics
+                  </h4>
+                  <div className="flex items-center gap-1.5">
+                    {activeCase.riderDetails?.eligibleForChallan !== false ? (
+                      <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                        Eligible for Challan
+                      </span>
+                    ) : (
+                      <span className="text-[11px] font-semibold text-rose-700 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
+                        Excluded from Challan
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                  <div>
+                    <span className="text-slate-400 block text-[11px]">Helmet Status:</span>
+                    <span className="font-semibold text-slate-900">
+                      {activeCase.riderDetails?.helmetClass || activeCase.violationType.replace(/_/g, ' ')}
+                    </span>
+                    {activeCase.riderDetails?.helmetConfidence !== undefined && (
+                      <span className="text-[10px] text-slate-500 block">
+                        {(activeCase.riderDetails.helmetConfidence * 100).toFixed(0)}% conf
+                      </span>
+                    )}
+                  </div>
+
+                  <div>
+                    <span className="text-slate-400 block text-[11px]">Vehicle Classification:</span>
+                    <span className={`font-semibold ${
+                      activeCase.riderDetails?.vehicleType === 'BICYCLE' 
+                        ? 'text-orange-700 font-bold' 
+                        : activeCase.riderDetails?.vehicleType === 'UNCERTAIN'
+                          ? 'text-amber-700'
+                          : 'text-blue-700'
+                    }`}>
+                      {activeCase.riderDetails?.vehicleType || 'MOTORCYCLE'}
+                    </span>
+                    <span className="text-[10px] text-slate-500 block">
+                      Assoc Score: {activeCase.riderDetails?.associationScore !== undefined 
+                        ? `${(activeCase.riderDetails.associationScore * 100).toFixed(0)}%` 
+                        : '100%'}
+                    </span>
+                  </div>
+
+                  <div>
+                    <span className="text-slate-400 block text-[11px]">Exclusion Policy:</span>
+                    <span className="font-semibold text-slate-800">
+                      {activeCase.riderDetails?.exclusionReason 
+                        ? activeCase.riderDetails.exclusionReason.replace(/_/g, ' ') 
+                        : 'None (Motorized)'}
+                    </span>
+                  </div>
+
+                  <div>
+                    <span className="text-slate-400 block text-[11px]">Review Pipeline:</span>
+                    <span className="font-semibold text-slate-800 font-mono text-[11px]">
+                      {activeCase.riderDetails?.reviewStatus || activeCase.status}
+                    </span>
+                  </div>
+                </div>
+
+                {activeCase.riderDetails?.vehicleType === 'BICYCLE' && (
+                  <div className="p-2.5 rounded-lg bg-orange-50 border border-orange-200 text-[11px] text-orange-900 flex items-start gap-2">
+                    <Info className="w-4 h-4 text-orange-600 shrink-0 mt-0.5" />
+                    <span>
+                      <strong>Statutory Bicycle Exemption:</strong> Section 129 Motor Vehicles Act applies only to motorized two-wheelers. Pedal cyclists are exempt from mandatory helmet challans. This candidate case cannot be approved as a motorized violation.
+                    </span>
+                  </div>
+                )}
+              </div>
+
               {/* Linked Registration Association */}
               <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 space-y-3">
                 <div className="flex items-center justify-between">
@@ -307,6 +516,14 @@ export const ReviewerQueuePage: React.FC = () => {
                   {activeCase.linkedPerson?.identityVerified ? (
                     <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 flex items-center gap-1">
                       <Check className="w-3 h-3" /> Verified Record
+                    </span>
+                  ) : activeCase.plateMatch?.matchStatus === 'UNVERIFIED' ? (
+                    <span className="text-[11px] font-semibold text-amber-800 bg-amber-100 px-2 py-0.5 rounded border border-amber-300">
+                      Unverified Plate
+                    </span>
+                  ) : activeCase.plateMatch?.matchStatus === 'MANUAL_REQUIRED' ? (
+                    <span className="text-[11px] font-semibold text-rose-800 bg-rose-100 px-2 py-0.5 rounded border border-rose-300">
+                      Manual Plate Review Required
                     </span>
                   ) : (
                     <span className="text-[11px] font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
@@ -337,8 +554,18 @@ export const ReviewerQueuePage: React.FC = () => {
                     </div>
                   </div>
                 ) : (
-                  <div className="text-xs text-slate-500 italic">
-                    Plate obscured or not found in state vehicle registry. Requires manual registration inquiry.
+                  <div className="space-y-2">
+                    <div className="text-xs text-slate-500 italic">
+                      {activeCase.plateMatch?.normalizedPlate 
+                        ? `License plate OCR resolved as "${activeCase.plateMatch.normalizedPlate}", but no matching registration exists in the state database.`
+                        : 'Plate obscured, unreadable, or not found in state vehicle registry.'}
+                    </div>
+                    <div className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 p-2.5 rounded-lg flex items-start gap-2">
+                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                      <span>
+                        <strong>Manual Review Mandated:</strong> Automated challan issuance without verified vehicle registration is strictly prohibited. The reviewer must conduct manual registration verification or reject unverified candidates.
+                      </span>
+                    </div>
                   </div>
                 )}
               </div>

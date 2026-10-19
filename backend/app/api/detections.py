@@ -55,6 +55,11 @@ from app.services.plate_reader import (
     match_plate_against_registry,
     is_placeholder_string,
 )
+from app.services.vehicle_classifier import (
+    vehicle_classifier,
+    VehicleType,
+    classify_vehicle_label,
+)
 from app.db.connection import get_db
 from app.db.collections import (
     COLLECTION_MODEL_RUNS,
@@ -173,8 +178,8 @@ def apply_nms(boxes: List[Dict[str, Any]], iou_threshold: float = 0.45) -> List[
 
     by_category: Dict[str, List[Dict[str, Any]]] = {}
     for b in boxes:
-        cat = b.get("category") or b.get("label") or "UNKNOWN"
-        by_category.setdefault(cat, []).append(b)
+        cat_key = f"{b.get('category', 'UNKNOWN')}:{str(b.get('label', '')).lower()}"
+        by_category.setdefault(cat_key, []).append(b)
 
     kept: List[Dict[str, Any]] = []
     for cat, cat_boxes in by_category.items():
@@ -368,6 +373,16 @@ async def analyze_frame(
     ]
     has_person_or_rider = len(rider_box_candidates) > 0
 
+    # Extract vehicle bounding boxes for vehicle-type classification & spatial association
+    vehicle_boxes = vehicle_classifier.extract_vehicle_boxes(det_result["boxes"], image=image)
+
+    # Ensure any secondary vehicle detections are mirrored into the overall boxes list
+    existing_box_ids = {b.get("id") for b in det_result["boxes"]}
+    for vb in vehicle_boxes:
+        if vb.get("id") not in existing_box_ids:
+            det_result["boxes"].append(vb)
+            existing_box_ids.add(vb.get("id"))
+
     for idx, rb in enumerate(rider_box_candidates):
         stable_id = f"rider-{idx + 1}-{file_hash[:8]}"
         label_raw = str(rb.get("label", ""))
@@ -376,13 +391,10 @@ async def analyze_frame(
         # Determine classification
         if category == "HELMET_VIOLATION" or label_raw.lower() in ("without helmet", "no_helmet", "no-helmet"):
             classification = "WITHOUT_HELMET"
-            is_viol = True
         elif category == "HELMET_COMPLIANT" or label_raw.lower() in ("with helmet", "helmet", "with-helmet"):
             classification = "WITH_HELMET"
-            is_viol = False
         else:
             classification = "UNKNOWN"
-            is_viol = False
 
         # Safe pixel crop bounded within image dimensions
         coords = rb.get("xyxy", [0, 0, 0, 0])
@@ -408,6 +420,29 @@ async def analyze_frame(
         x2_norm = round(rx2 / width, 4)
         y2_norm = round(ry2 / height, 4)
 
+        # Vehicle classification and spatial association
+        v_type, v_conf, v_coords, assoc_score = vehicle_classifier.associate_rider(
+            [float(rx1), float(ry1), float(rx2), float(ry2)],
+            vehicle_boxes,
+        )
+        eligible_for_challan, exclusion_reason = vehicle_classifier.evaluate_challan_eligibility(
+            classification,
+            v_type,
+            rb.get("confidence", 0.0),
+        )
+        is_viol = bool(eligible_for_challan and classification == "WITHOUT_HELMET")
+
+        # Determine review status for diagnostics
+        if not eligible_for_challan:
+            if v_type == VehicleType.BICYCLE:
+                diag_review_status = "EXCLUDED_BICYCLE"
+            elif classification == "WITH_HELMET":
+                diag_review_status = "COMPLIANT_HELMET"
+            else:
+                diag_review_status = "NEEDS_MANUAL_REVIEW"
+        else:
+            diag_review_status = "PENDING_REVIEW"
+
         riders_response.append(
             RiderDetectionModel(
                 detectionId=stable_id,
@@ -418,11 +453,20 @@ async def analyze_frame(
                 normalized=[x1_norm, y1_norm, x2_norm, y2_norm],
                 cropPath=rider_crop_path,
                 isViolation=is_viol,
+                vehicleType=v_type.value,
+                vehicleConfidence=v_conf if v_conf > 0 else None,
+                vehicleBbox=[float(c) for c in v_coords] if v_coords else None,
+                associationScore=assoc_score if assoc_score > 0 else None,
+                eligibleForChallan=eligible_for_challan,
+                exclusionReason=exclusion_reason,
+                helmetClass=label_raw,
+                helmetConfidence=rb.get("confidence", 0.0),
+                reviewStatus=diag_review_status,
             )
         )
 
-    # Filter distinct unhelmeted riders requiring review
-    violating_riders = [r for r in riders_response if r.isViolation and r.classification == "WITHOUT_HELMET"]
+    # Filter distinct eligible unhelmeted riders requiring review
+    violating_riders = [r for r in riders_response if r.eligibleForChallan and r.classification == "WITHOUT_HELMET"]
 
     # 8. Extract license plate & match against registry
     plate_boxes = [
@@ -570,6 +614,13 @@ async def analyze_frame(
                             bbox=rider_det.get("bbox", [0.0, 0.0, 0.0, 0.0]),
                             normalized=rider_det.get("normalized", norm),
                             isDeduplicated=True,
+                            vehicleType=rider_det.get("vehicleType", "MOTORCYCLE"),
+                            vehicleConfidence=rider_det.get("vehicleConfidence"),
+                            vehicleBbox=rider_det.get("vehicleBbox"),
+                            associationScore=rider_det.get("associationScore"),
+                            eligibleForChallan=rider_det.get("eligibleForChallan", True),
+                            exclusionReason=rider_det.get("exclusionReason"),
+                            reviewStatus="PENDING_REVIEW",
                         )
                     )
                 is_deduplicated = True
@@ -589,24 +640,26 @@ async def analyze_frame(
                         ).sort("createdAt", -1)
                     )
 
+                # Track matched recent case IDs to prevent multiple distinct riders in the current frame from collapsing into one
+                matched_case_ids: set = set()
+
                 # Process each distinct unhelmeted rider into an independent review case
                 for r_idx, r in enumerate(violating_riders):
                     matched_recent = None
                     if recent_cases:
                         for rc in recent_cases:
-                            # 1. Plate match link
-                            rc_plate = rc.get("plateMatch", {}).get("normalizedPlate")
-                            if rc_plate and plate_match_res and plate_match_res.normalizedPlate and rc_plate == plate_match_res.normalizedPlate:
-                                matched_recent = rc
-                                break
-                            # 2. Spatial bounding box tracking
+                            if rc.get("caseId") in matched_case_ids:
+                                continue
+                            # Must match spatial bounding box tracking of the same physical rider
                             if is_same_tracked_rider(r.normalized, rc):
                                 matched_recent = rc
+                                matched_case_ids.add(rc.get("caseId"))
                                 break
 
                     if matched_recent:
                         # Existing tracked incident within cooldown
                         ec_case_id = matched_recent["caseId"]
+                        r.caseId = ec_case_id
                         cases_summary.append(
                             IngestedCaseSummary(
                                 caseId=ec_case_id,
@@ -618,6 +671,13 @@ async def analyze_frame(
                                 bbox=r.bbox,
                                 normalized=r.normalized,
                                 isDeduplicated=True,
+                                vehicleType=r.vehicleType or "MOTORCYCLE",
+                                vehicleConfidence=r.vehicleConfidence,
+                                vehicleBbox=r.vehicleBbox,
+                                associationScore=r.associationScore,
+                                eligibleForChallan=r.eligibleForChallan,
+                                exclusionReason=r.exclusionReason,
+                                reviewStatus="PENDING_REVIEW",
                             )
                         )
                         created_at = matched_recent.get("createdAt")
@@ -682,6 +742,11 @@ async def analyze_frame(
                                 "bbox": r.bbox,
                                 "normalized": r.normalized,
                                 "cropPath": r.cropPath,
+                                "vehicleType": r.vehicleType,
+                                "vehicleConfidence": r.vehicleConfidence,
+                                "vehicleBbox": r.vehicleBbox,
+                                "eligibleForChallan": r.eligibleForChallan,
+                                "exclusionReason": r.exclusionReason,
                             },
                             "modelRunId": None,
                             "identityVerificationStatus": verification_status,
@@ -737,8 +802,16 @@ async def analyze_frame(
                                 bbox=r.bbox,
                                 normalized=r.normalized,
                                 isDeduplicated=False,
+                                vehicleType=r.vehicleType or "MOTORCYCLE",
+                                vehicleConfidence=r.vehicleConfidence,
+                                vehicleBbox=r.vehicleBbox,
+                                associationScore=r.associationScore,
+                                eligibleForChallan=r.eligibleForChallan,
+                                exclusionReason=r.exclusionReason,
+                                reviewStatus="PENDING_REVIEW",
                             )
                         )
+                        r.caseId = case_id
 
                 if cases_summary:
                     is_deduplicated = all(c.isDeduplicated for c in cases_summary)
@@ -769,6 +842,9 @@ async def analyze_frame(
                 "vehiclesCount": len([b for b in det_result["boxes"] if b.get("category") == "VEHICLE"]),
                 "personsCount": len(rider_box_candidates),
                 "ridersCount": len(riders_response),
+                "motorcyclesCount": len([r for r in riders_response if r.vehicleType == "MOTORCYCLE"]),
+                "bicyclesCount": len([r for r in riders_response if r.vehicleType == "BICYCLE"]),
+                "excludedCyclistsCount": len([r for r in riders_response if r.vehicleType == "BICYCLE" and r.classification == "WITHOUT_HELMET"]),
                 "casesCount": len(cases_summary),
                 "newCasesCount": len(new_inserted_case_ids),
                 "isCandidateViolation": is_candidate_violation,
@@ -823,7 +899,12 @@ async def analyze_frame(
             )
 
     # Determine overall status
-    overall_status = "PENDING_REVIEW" if is_candidate_violation else "NO_VIOLATION"
+    if is_candidate_violation:
+        overall_status = "PENDING_REVIEW"
+    elif any(r.classification == "WITHOUT_HELMET" and r.vehicleType == VehicleType.UNCERTAIN.value for r in riders_response):
+        overall_status = "NEEDS_MANUAL_REVIEW"
+    else:
+        overall_status = "NO_VIOLATION"
 
     # Construct response DTO
     evidence_model = EvidenceModel(
@@ -835,25 +916,44 @@ async def analyze_frame(
         fileSizeBytes=file_size,
     )
 
-    boxes_response = [
-        DetectionBoxResponse(
-            id=b["id"],
-            label=b["label"],
-            classId=b["classId"],
-            category=b["category"],
-            confidence=b["confidence"],
-            xyxy=b["xyxy"],
-            normalized=b["normalized"],
-            percentage=DetectionBoxPercentage(
-                x=b["percentage"]["x"],
-                y=b["percentage"]["y"],
-                width=b["percentage"]["width"],
-                height=b["percentage"]["height"],
-            ),
-            color=b["color"],
+    boxes_response: List[DetectionBoxResponse] = []
+    for idx, b in enumerate(det_result["boxes"]):
+        pct = b.get("percentage") or {}
+        norm = b.get("normalized")
+        if not norm and "xyxy" in b and width > 0 and height > 0:
+            c = b["xyxy"]
+            norm = [
+                round(c[0] / width, 4),
+                round(c[1] / height, 4),
+                round(c[2] / width, 4),
+                round(c[3] / height, 4),
+            ]
+        elif not norm:
+            norm = [0.0, 0.0, 0.0, 0.0]
+
+        pct_x = pct.get("x", round(norm[0] * 100, 2))
+        pct_y = pct.get("y", round(norm[1] * 100, 2))
+        pct_w = pct.get("width", round(max(0.0, norm[2] - norm[0]) * 100, 2))
+        pct_h = pct.get("height", round(max(0.0, norm[3] - norm[1]) * 100, 2))
+
+        boxes_response.append(
+            DetectionBoxResponse(
+                id=b.get("id", f"box-{idx + 1}"),
+                label=b.get("label", "OBJECT"),
+                classId=b.get("classId", 0),
+                category=b.get("category", "OTHER"),
+                confidence=round(float(b.get("confidence", 0.0)), 4),
+                xyxy=[float(c) for c in b.get("xyxy", [0.0, 0.0, 0.0, 0.0])],
+                normalized=norm,
+                percentage=DetectionBoxPercentage(
+                    x=pct_x,
+                    y=pct_y,
+                    width=pct_w,
+                    height=pct_h,
+                ),
+                color=b.get("color", "#2563EB"),
+            )
         )
-        for b in det_result["boxes"]
-    ]
 
     vehicles_response = [b for b in boxes_response if b.category == "VEHICLE"]
     persons_response = [b for b in boxes_response if b.category == "PERSON"]

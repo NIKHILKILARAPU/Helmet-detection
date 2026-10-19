@@ -18,13 +18,12 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context';
 import { cameraService } from '../../services/cameraService';
-import { apiClient, getMediaUrl } from '../../services/api';
+import { apiClient } from '../../services/api';
 import type { CameraDevice } from '../../services/cameraService';
-import type { BoundingBox, ViolationCase, DetectionAnalysisResult, RiderDetection, PlateMatchResult } from '../../types';
-import { EvidenceCropImage } from '../../components/common/EvidenceCropImage';
+import type { BoundingBox, DetectionAnalysisResult } from '../../types';
 
 export const CameraOperatorPage: React.FC = () => {
-  const { addNewCapturedCase, addToast, currentUser } = useApp();
+  const { addToast } = useApp();
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -89,7 +88,7 @@ export const CameraOperatorPage: React.FC = () => {
 
   const [recentCaptures, setRecentCaptures] = useState<{ id: string; url: string; time: string; outcome: string; isDeduplicated?: boolean }[]>([]);
   const [lastDetectionResult, setLastDetectionResult] = useState<{
-    status: 'HELMET_DETECTED' | 'NO_HELMET_CANDIDATE' | 'UNCERTAIN' | 'NO_DETECTION' | 'COCO_OBJECTS_ONLY';
+    status: 'HELMET_DETECTED' | 'NO_HELMET_CANDIDATE' | 'UNCERTAIN' | 'NO_DETECTION' | 'COCO_OBJECTS_ONLY' | 'NEEDS_MANUAL_REVIEW';
     confidence: number;
     violationType?: string;
     caseId?: string;
@@ -99,12 +98,12 @@ export const CameraOperatorPage: React.FC = () => {
     totalDetections: number;
     vehiclesCount: number;
     personsCount: number;
+    helmetsCount?: number;
+    noHelmetsCount?: number;
     processingTimeMs: number;
     helmetClassificationAvailable: boolean;
     helmetClassificationMessage: string;
     boxes: BoundingBox[];
-    riders?: RiderDetection[];
-    plateMatch?: PlateMatchResult | null;
   } | null>(null);
 
   // Fetch model status
@@ -165,7 +164,7 @@ export const CameraOperatorPage: React.FC = () => {
   const processInferenceResponse = useCallback((
     res: { success: boolean; data?: DetectionAnalysisResult; error?: string; errorCode?: string; details?: any[] },
     snapshotUrl: string,
-    sourceLabel: string
+    _sourceLabel?: string
   ) => {
     if (!res.success) {
       setErrorMessage(res.error || 'Inference analysis failed.');
@@ -227,8 +226,10 @@ export const CameraOperatorPage: React.FC = () => {
     setOverlayBoxes(uiBoxes);
 
     // Determine status badge
-    let outcome: 'HELMET_DETECTED' | 'NO_HELMET_CANDIDATE' | 'UNCERTAIN' | 'NO_DETECTION' | 'COCO_OBJECTS_ONLY';
-    if (det.isCandidateViolation) {
+    let outcome: 'HELMET_DETECTED' | 'NO_HELMET_CANDIDATE' | 'UNCERTAIN' | 'NO_DETECTION' | 'COCO_OBJECTS_ONLY' | 'NEEDS_MANUAL_REVIEW';
+    if (det.status === 'NEEDS_MANUAL_REVIEW' || (det.plateMatch?.matchStatus === 'MANUAL_REQUIRED' && (!det.riders || det.riders.length === 0))) {
+      outcome = 'NEEDS_MANUAL_REVIEW';
+    } else if (det.isCandidateViolation) {
       outcome = 'NO_HELMET_CANDIDATE';
     } else if (det.helmetClassificationAvailable && det.boxes.some(b => b.category === 'HELMET_COMPLIANT')) {
       outcome = 'HELMET_DETECTED';
@@ -239,89 +240,9 @@ export const CameraOperatorPage: React.FC = () => {
     }
 
     const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    const nowIso = new Date().toISOString().replace('T', ' ').substring(0, 19);
 
-    // If candidate violation AND NOT deduplicated, ingest to reviewer queue
-    if (det.isCandidateViolation && det.caseId && !det.isDeduplicated) {
-      if (det.cases && det.cases.length > 0) {
-        det.cases.forEach((sc) => {
-          if (!sc.isDeduplicated) {
-            const candidateCase: ViolationCase = {
-              id: sc.caseId,
-              timestamp: nowIso,
-              camera: {
-                id: selectedDeviceId || 'CAM-OPERATOR-WEBCAM',
-                name: sourceLabel,
-                location: 'Operator Workspace Live Camera',
-                type: selectedSourceType
-              },
-              violationType: sc.violationType || det.violationType || 'NO_HELMET_RIDER',
-              confidence: sc.confidence || det.violationConfidence || 0.85,
-              status: 'PENDING_REVIEW',
-              evidenceImageUrl: snapshotUrl,
-              evidenceQuality: 'HIGH',
-              boundingBoxes: uiBoxes,
-              linkedPerson: undefined,
-              reviewerNotes: '',
-              reviewHistory: [
-                {
-                  id: `audit-${Date.now()}-${sc.caseId}`,
-                  timestamp: nowIso,
-                  actor: currentUser?.name || 'Camera Operator',
-                  role: 'operator',
-                  action: 'CREATED',
-                  notes: `Candidate rider ${sc.detectionId} analyzed via Roboflow Hosted Inference. Queued with status PENDING_REVIEW.`
-                }
-              ],
-              riders: det.riders,
-              plateMatch: det.plateMatch,
-              riderCropUrl: sc.cropPath ? getMediaUrl(sc.cropPath) : null,
-              riderDetails: {
-                detectionId: sc.detectionId,
-                classification: 'WITHOUT_HELMET',
-                confidence: sc.confidence,
-                bbox: sc.bbox,
-                normalized: sc.normalized,
-                cropPath: sc.cropPath
-              }
-            };
-            addNewCapturedCase(candidateCase);
-          }
-        });
-      } else {
-        const candidateCase: ViolationCase = {
-          id: det.caseId,
-          timestamp: nowIso,
-          camera: {
-            id: selectedDeviceId || 'CAM-OPERATOR-WEBCAM',
-            name: sourceLabel,
-            location: 'Operator Workspace Live Camera',
-            type: selectedSourceType
-          },
-          violationType: det.violationType || 'NO_HELMET_RIDER',
-          confidence: det.violationConfidence || 0.85,
-          status: 'PENDING_REVIEW',
-          evidenceImageUrl: snapshotUrl,
-          evidenceQuality: 'HIGH',
-          boundingBoxes: uiBoxes,
-          linkedPerson: undefined,
-          reviewerNotes: '',
-          reviewHistory: [
-            {
-              id: `audit-${Date.now()}`,
-              timestamp: nowIso,
-              actor: currentUser?.name || 'Camera Operator',
-              role: 'operator',
-              action: 'CREATED',
-              notes: `Candidate frame analyzed via Roboflow Hosted Inference. Detected: ${det.violationType}. Queued with status PENDING_REVIEW.`
-            }
-          ],
-          riders: det.riders,
-          plateMatch: det.plateMatch
-        };
-        addNewCapturedCase(candidateCase);
-      }
-    }
+    // Note: Candidate violation cases are ingested directly to MongoDB (with status PENDING_REVIEW)
+    // by the backend detection endpoint. Human-in-the-loop review is conducted exclusively on the Reviewer Desk.
 
     setRecentCaptures(prev => [
       {
@@ -345,14 +266,14 @@ export const CameraOperatorPage: React.FC = () => {
       totalDetections: det.totalDetections,
       vehiclesCount: det.vehicles?.length || 0,
       personsCount: det.persons?.length || 0,
+      helmetsCount: det.boxes.filter(b => b.label === 'With Helmet' || b.category === 'HELMET_COMPLIANT').length,
+      noHelmetsCount: det.boxes.filter(b => b.label === 'Without Helmet' || b.category === 'NO_HELMET_VIOLATION').length,
       processingTimeMs: det.processingTimeMs,
       helmetClassificationAvailable: det.helmetClassificationAvailable,
       helmetClassificationMessage: det.helmetClassificationMessage,
       boxes: uiBoxes,
-      riders: det.riders,
-      plateMatch: det.plateMatch
     });
-  }, [addNewCapturedCase, addToast, currentUser?.name, selectedDeviceId, selectedSourceType]);
+  }, [addToast]);
 
   // Execute a single cycle of frame capture and analysis (mutex guarded)
   const executeCaptureCycle = useCallback(async (): Promise<void> => {
@@ -1205,12 +1126,19 @@ export const CameraOperatorPage: React.FC = () => {
                     ? 'bg-rose-50 border-rose-200' 
                     : lastDetectionResult.status === 'HELMET_DETECTED'
                       ? 'bg-emerald-50 border-emerald-200'
-                      : 'bg-slate-50 border-slate-200'
+                      : lastDetectionResult.status === 'NEEDS_MANUAL_REVIEW'
+                        ? 'bg-amber-50 border-amber-200'
+                        : 'bg-slate-50 border-slate-200'
                 }`}>
                   <div>
                     <span className="text-[11px] text-slate-500 block font-medium">Outcome Classification:</span>
-                    <div className="text-sm font-bold text-slate-900 mt-0.5 flex items-center gap-1.5">
+                    <div className="text-sm font-bold text-slate-900 mt-0.5 flex items-center gap-1.5 flex-wrap">
                       <span>{lastDetectionResult.status.replace(/_/g, ' ')}</span>
+                      {lastDetectionResult.status === 'NEEDS_MANUAL_REVIEW' && (
+                        <span className="text-[10px] bg-amber-200 text-amber-900 px-1.5 py-0.5 rounded font-bold border border-amber-300">
+                          MANUAL REVIEW
+                        </span>
+                      )}
                       {lastDetectionResult.isDeduplicated && (
                         <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-semibold border border-amber-300">
                           COOLDOWN
@@ -1260,148 +1188,62 @@ export const CameraOperatorPage: React.FC = () => {
                   </div>
                 )}
 
-                {/* Rider Evidence Crops */}
-                <div className="space-y-2 pt-2 border-t border-slate-100">
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-[11px] text-slate-800 flex items-center gap-1.5">
+                {/* Operator Detection Statistics & Reviewer Queue Dispatch */}
+                <div className="space-y-2.5 pt-2 border-t border-slate-100 text-xs">
+                  <div className="font-semibold text-[11px] text-slate-800 flex items-center justify-between">
+                    <span className="flex items-center gap-1.5">
                       <Layers className="w-3.5 h-3.5 text-blue-600" />
-                      Detected Rider Crops ({lastDetectionResult.riders?.length || 0})
+                      Frame Detection Statistics
                     </span>
-                    {lastDetectionResult.riders && lastDetectionResult.riders.length > 0 && (
-                      <span className="text-[10px] text-slate-500 font-medium">
-                        {lastDetectionResult.riders.filter(r => r.isViolation).length} violation candidate(s)
-                      </span>
-                    )}
-                  </div>
-
-                  {lastDetectionResult.riders && lastDetectionResult.riders.length > 0 ? (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                      {lastDetectionResult.riders.map((rider, idx) => (
-                        <div key={rider.detectionId || idx} className="space-y-1">
-                          <EvidenceCropImage
-                            src={rider.cropPath}
-                            alt={rider.label}
-                            label={`Rider #${idx + 1}`}
-                            subtitle={rider.detectionId}
-                            confidence={rider.confidence}
-                            aspectRatio="aspect-4/3"
-                            badge={
-                              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                                rider.classification === 'WITHOUT_HELMET'
-                                  ? 'bg-rose-100 text-rose-800 border border-rose-300'
-                                  : rider.classification === 'WITH_HELMET'
-                                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                                    : 'bg-slate-100 text-slate-700 border border-slate-300'
-                              }`}>
-                                {rider.classification === 'WITHOUT_HELMET' 
-                                  ? 'NO HELMET' 
-                                  : rider.classification === 'WITH_HELMET' 
-                                    ? 'WITH HELMET' 
-                                    : 'UNKNOWN'}
-                              </span>
-                            }
-                          />
-                          <div className="flex items-center justify-between text-[10px] text-slate-500 px-1 font-mono">
-                            <span>BBox: [{rider.bbox?.map(n => Math.round(n)).join(', ')}]</span>
-                            {rider.isViolation && (
-                              <span className="text-rose-600 font-bold uppercase text-[9px]">Flagged</span>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-center text-[11px] text-slate-400">
-                      No distinct rider bounding boxes detected in this frame.
-                    </div>
-                  )}
-                </div>
-
-                {/* License Plate Recognition & Crop */}
-                <div className="space-y-2 pt-2 border-t border-slate-100">
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-[11px] text-slate-800 flex items-center gap-1.5">
-                      <Radio className="w-3.5 h-3.5 text-amber-600" />
-                      License Plate Recognition &amp; Crop
-                    </span>
-                    {lastDetectionResult.plateMatch?.matchStatus && (
-                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                        lastDetectionResult.plateMatch.matchStatus === 'VERIFIED'
-                          ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                          : 'bg-amber-100 text-amber-800 border border-amber-300'
-                      }`}>
-                        {lastDetectionResult.plateMatch.matchStatus.replace('_', ' ')}
-                      </span>
-                    )}
-                  </div>
-
-                  {lastDetectionResult.plateMatch?.cropPath || lastDetectionResult.plateMatch?.plateDetected ? (
-                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 p-2.5 rounded-lg border border-slate-200 bg-slate-50/70 items-center">
-                      <div className="sm:col-span-5">
-                        <EvidenceCropImage
-                          src={lastDetectionResult.plateMatch.cropPath}
-                          alt={lastDetectionResult.plateMatch.normalizedPlate || 'License Plate Crop'}
-                          label="Plate Crop"
-                          confidence={lastDetectionResult.plateMatch.confidence}
-                          aspectRatio="aspect-16/9"
-                          maxHeight="max-h-24"
-                        />
-                      </div>
-                      <div className="sm:col-span-7 space-y-1.5 text-xs">
-                        <div>
-                          <span className="text-[10px] text-slate-400 block font-medium">Extracted Plate:</span>
-                          <span className="font-mono font-bold text-sm text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200 inline-block">
-                            {lastDetectionResult.plateMatch.normalizedPlate || lastDetectionResult.plateMatch.rawText || 'OCR UNRESOLVED'}
-                          </span>
-                        </div>
-                        {lastDetectionResult.plateMatch.ownerNameSnapshot && (
-                          <div className="text-[11px] text-slate-600">
-                            <span className="text-slate-400">Reg Owner:</span> <span className="font-semibold text-slate-800">{lastDetectionResult.plateMatch.ownerNameSnapshot}</span>
-                          </div>
-                        )}
-                        <div className="text-[10px] text-slate-500">
-                          <span>Status: {lastDetectionResult.plateMatch.matchStatus}</span>
-                          {lastDetectionResult.plateMatch.matchSource && (
-                            <span> • Source: {lastDetectionResult.plateMatch.matchSource}</span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-center text-[11px] text-slate-400">
-                      No vehicle license plate detected in this frame.
-                    </div>
-                  )}
-                </div>
-
-                <div className="text-xs space-y-1.5 text-slate-600 pt-1">
-                  <div className="flex justify-between">
-                    <span>Detected Objects:</span>
-                    <span className="font-semibold text-slate-800">
-                      {lastDetectionResult.totalDetections} total ({lastDetectionResult.vehiclesCount} vehicle, {lastDetectionResult.personsCount} person)
+                    <span className="text-slate-500 font-mono text-[10px]">
+                      {lastDetectionResult.totalDetections} detected item(s)
                     </span>
                   </div>
-                  {lastDetectionResult.caseId && (
-                    <div className="flex justify-between">
-                      <span>Draft Case ID:</span>
-                      <span className="font-mono font-bold text-slate-900">{lastDetectionResult.caseId}</span>
+
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="p-2 rounded-lg bg-slate-50 border border-slate-100">
+                      <span className="text-[10px] text-slate-500 block">Vehicles &amp; Persons</span>
+                      <span className="font-semibold text-slate-800">
+                        {lastDetectionResult.vehiclesCount} veh / {lastDetectionResult.personsCount} person
+                      </span>
                     </div>
-                  )}
-                  <div className="flex justify-between">
-                    <span>Reviewer Queue Ingestion:</span>
-                    {lastDetectionResult.isDeduplicated ? (
-                      <span className="text-amber-700 font-semibold flex items-center gap-1">
-                        <Clock className="w-3.5 h-3.5" /> Suppressed (Cooldown)
+                    <div className="p-2 rounded-lg bg-slate-50 border border-slate-100">
+                      <span className="text-[10px] text-slate-500 block">Helmet Class Counts</span>
+                      <span className="font-semibold text-slate-800">
+                        {lastDetectionResult.helmetsCount ?? 0} with / {lastDetectionResult.noHelmetsCount ?? 0} without
                       </span>
-                    ) : lastDetectionResult.savedToQueue ? (
-                      <span className="text-emerald-700 font-semibold flex items-center gap-1">
-                        <CheckCircle2 className="w-3.5 h-3.5" /> Queued (PENDING_REVIEW)
+                    </div>
+                  </div>
+
+                  {/* Dispatch / Reviewer Queue Ingestion Status */}
+                  <div className="p-2.5 rounded-lg border bg-slate-50 border-slate-200 space-y-1.5">
+                    <div className="flex justify-between items-center text-[11px]">
+                      <span className="text-slate-500 font-medium">Reviewer Queue Ingestion:</span>
+                      {lastDetectionResult.isDeduplicated ? (
+                        <span className="text-amber-700 font-semibold flex items-center gap-1 text-[11px]">
+                          <Clock className="w-3.5 h-3.5" /> Suppressed (Cooldown)
+                        </span>
+                      ) : lastDetectionResult.status === 'NEEDS_MANUAL_REVIEW' ? (
+                        <span className="text-amber-700 font-semibold flex items-center gap-1 text-[11px]">
+                          <AlertCircle className="w-3.5 h-3.5" /> Flagged for Review
+                        </span>
+                      ) : lastDetectionResult.savedToQueue ? (
+                        <span className="text-emerald-700 font-semibold flex items-center gap-1 text-[11px]">
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Ingested (PENDING_REVIEW)
+                        </span>
+                      ) : (
+                        <span className="text-slate-400 font-medium text-[11px]">
+                          Not flagged (Compliant / Excluded)
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="text-[10px] text-slate-500 leading-relaxed border-t border-slate-200/60 pt-1.5 flex items-start gap-1.5">
+                      <ShieldAlert className="w-3.5 h-3.5 text-blue-600 shrink-0 mt-0.5" />
+                      <span>
+                        Candidate review actions—viewing isolated evidence crops, person/vehicle registration lookup, draft approval, and rejection—are managed exclusively on the <strong>Reviewer Desk</strong>. Official challans require human verification.
                       </span>
-                    ) : (
-                      <span className="text-slate-400 font-medium">
-                        Not flagged (Compliant)
-                      </span>
-                    )}
+                    </div>
                   </div>
                 </div>
               </div>

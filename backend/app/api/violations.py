@@ -45,6 +45,8 @@ def _build_case_query(case_id: str) -> Dict[str, Any]:
 def _clean_mongo_types(val: Any) -> Any:
     if isinstance(val, ObjectId):
         return str(val)
+    if isinstance(val, datetime):
+        return val.isoformat()
     if isinstance(val, dict):
         return {k: _clean_mongo_types(v) for k, v in val.items()}
     if isinstance(val, list):
@@ -56,6 +58,10 @@ def _serialize_violation(doc: Dict[str, Any]) -> Dict[str, Any]:
     """Normalizes MongoDB document into JSON-serializable dictionary."""
     clean = _clean_mongo_types(doc)
     clean["id"] = clean.get("caseId") or str(clean.get("_id"))
+    if "evidence" in clean and isinstance(clean["evidence"], dict):
+        clean["evidenceImageUrl"] = clean["evidence"].get("storagePath")
+    if "riderDetails" in clean and isinstance(clean["riderDetails"], dict):
+        clean["riderCropUrl"] = clean["riderDetails"].get("cropPath")
     return clean
 
 
@@ -88,6 +94,11 @@ async def list_violations(
     query: Dict[str, Any] = {}
     if status_filter:
         query["status"] = status_filter.value
+        # If querying active PENDING_REVIEW queue, exclude any historical or ineligible cyclist cases
+        if status_filter == ViolationStatus.PENDING_REVIEW:
+            query["riderDetails.eligibleForChallan"] = {"$ne": False}
+            query["riderDetails.vehicleType"] = {"$ne": "BICYCLE"}
+            query["riderDetails.exclusionReason"] = {"$ne": "BICYCLE_EXCLUDED"}
     if violation_type:
         query["violationType"] = violation_type.value
     if min_confidence is not None:
@@ -420,4 +431,81 @@ async def reject_candidate_case(
         success=True,
         data=response_data,
         message=f"Case {case_id} rejected by {current_user['name']}.",
+    )
+
+
+@router.post(
+    "/reconcile-cyclists",
+    response_model=ApiResponse[Dict[str, Any]],
+    status_code=status.HTTP_200_OK,
+    summary="Safely reconcile and exclude invalid historical cyclist cases from active queue",
+)
+async def reconcile_historical_cyclist_cases(
+    current_user: dict = Depends(require_reviewer),
+):
+    """
+    Identifies any candidate violation cases in PENDING_REVIEW that were created
+    for pedal bicycle riders or ineligible non-motorized vehicles, and transitions
+    them to REJECTED with cause BICYCLE_EXCLUDED under Section 129 Motor Vehicles Act.
+    Preserves audit logging and does not delete records.
+    """
+    db = get_db()
+    now = datetime.now(timezone.utc)
+
+    cyclist_query = {
+        "status": ViolationStatus.PENDING_REVIEW.value,
+        "$or": [
+            {"riderDetails.vehicleType": "BICYCLE"},
+            {"riderDetails.eligibleForChallan": False},
+            {"riderDetails.exclusionReason": "BICYCLE_EXCLUDED"},
+            {"violationType": "BICYCLE"},
+        ]
+    }
+
+    matching_docs = list(db[COLLECTION_VIOLATIONS].find(cyclist_query))
+    reconciled_case_ids = []
+
+    for doc in matching_docs:
+        c_id = doc.get("caseId")
+        if not c_id:
+            continue
+        update_result = db[COLLECTION_VIOLATIONS].update_one(
+            {"caseId": c_id, "status": ViolationStatus.PENDING_REVIEW.value},
+            {
+                "$set": {
+                    "status": ViolationStatus.REJECTED.value,
+                    "rejectionReason": "BICYCLE_EXCLUDED",
+                    "reviewerNotes": "Automated statutory audit: Pedal bicycle riders are legally exempt under Section 129 Motor Vehicles Act.",
+                    "reviewedBy": ObjectId(current_user["id"]) if ObjectId.is_valid(current_user.get("id", "")) else None,
+                    "reviewedAt": now,
+                    "updatedAt": now,
+                }
+            }
+        )
+        if update_result.modified_count > 0:
+            reconciled_case_ids.append(c_id)
+            audit_entry = {
+                "timestamp": now,
+                "actorUserId": ObjectId(current_user["id"]) if ObjectId.is_valid(current_user["id"]) else None,
+                "actorNameSnapshot": current_user["name"],
+                "actorRoleSnapshot": current_user["role"],
+                "action": "STATUTORY_CYCLIST_EXCLUSION",
+                "entityType": "violation",
+                "entityId": c_id,
+                "notes": "Case transitioned from PENDING_REVIEW to REJECTED. Cyclist legally excluded under Section 129 MVA.",
+                "metadata": {"previousStatus": "PENDING_REVIEW", "newStatus": "REJECTED"},
+                "requestId": None,
+            }
+            try:
+                db[COLLECTION_AUDIT_LOGS].insert_one(audit_entry)
+            except Exception:
+                pass
+
+    return ApiResponse(
+        success=True,
+        data={
+            "reconciledCount": len(reconciled_case_ids),
+            "reconciledCaseIds": reconciled_case_ids,
+        },
+        message=f"Reconciled {len(reconciled_case_ids)} historical cyclist case(s) from active review queue.",
     )

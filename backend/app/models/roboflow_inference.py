@@ -108,6 +108,10 @@ class RoboflowInferenceEngine:
         elif norm.lower() in [ROBOFLOW_CLASS_LICENCE.lower(), "license", "plate"]:
             return "LICENSE_PLATE", "#D97706", False
         else:
+            from app.services.vehicle_classifier import classify_vehicle_label, VehicleType
+            v_type = classify_vehicle_label(norm)
+            if v_type in (VehicleType.MOTORCYCLE, VehicleType.BICYCLE, VehicleType.OTHER):
+                return "VEHICLE", "#2563EB", False
             return "OTHER", "#64748B", False
 
     def _prepare_image_payload(
