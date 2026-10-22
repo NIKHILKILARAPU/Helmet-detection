@@ -80,15 +80,24 @@ class RoboflowInferenceEngine:
     def get_model_info(self) -> Dict[str, Any]:
         """Returns structured metadata about model state, provider, and supported classes."""
         configured = self.is_configured()
+        class_list = (
+            list(self.supported_classes.values())
+            if isinstance(self.supported_classes, dict)
+            else list(self.supported_classes)
+        )
+        err = None if configured else "ROBOFLOW_API_KEY is missing or invalid in backend/.env"
         return {
             "provider": "roboflow",
             "isLoaded": configured,
+            "fileExists": True if configured else False,
             "modelId": self.model_id,
             "classesCount": len(self.supported_classes),
             "classes": self.supported_classes,
+            "classNames": class_list,
             "helmetClassificationSupported": True,
             "confidenceThreshold": self.confidence_threshold,
-            "loadError": None if configured else "ROBOFLOW_API_KEY is missing or invalid in backend/.env",
+            "loadError": err,
+            "errorMessage": err,
             "expectedClasses": EXPECTED_ROBOFLOW_CLASSES,
         }
 

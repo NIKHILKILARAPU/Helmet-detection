@@ -1,7 +1,63 @@
 import os
 from typing import Optional
-from pydantic import Field, AliasChoices
+from pydantic import Field, AliasChoices, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Base directory hierarchy
+BACKEND_DIR: str = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+PROJECT_ROOT: str = os.path.abspath(os.path.join(BACKEND_DIR, ".."))
+MODELS_DIR: str = os.path.join(PROJECT_ROOT, "models")
+DEFAULT_YOLO_MODEL_PATH: str = os.path.join(MODELS_DIR, "yolov8n-traffic.pt")
+
+
+def resolve_model_path(path_str: Optional[str] = None) -> str:
+    """
+    Centrally resolves a YOLO model weights path to a canonical absolute path.
+    Prevents path resolution discrepancies caused by running processes from different directories
+    (e.g., repository root vs backend directory vs test runner).
+
+    Resolution hierarchy:
+    1. If path is None/empty: returns DEFAULT_YOLO_MODEL_PATH (PROJECT_ROOT/models/yolov8n-traffic.pt).
+    2. If path is already absolute: returns normalized absolute path.
+    3. Checks if the relative path exists relative to BACKEND_DIR.
+    4. Checks if the relative path exists relative to PROJECT_ROOT.
+    5. Checks if the relative path exists relative to MODELS_DIR.
+    6. If file is not yet on disk, resolves canonical destination:
+       - paths starting with '../' or '../models' -> resolved relative to BACKEND_DIR
+       - paths starting with 'models/' -> resolved relative to PROJECT_ROOT
+       - filenames (e.g. 'yolov8n-traffic.pt') -> resolved relative to MODELS_DIR
+    """
+    if not path_str or not str(path_str).strip():
+        return DEFAULT_YOLO_MODEL_PATH
+
+    raw = str(path_str).strip()
+    if os.path.isabs(raw):
+        return os.path.abspath(raw)
+
+    # 1. Check relative to backend directory
+    cand_backend = os.path.abspath(os.path.join(BACKEND_DIR, raw))
+    if os.path.isfile(cand_backend):
+        return cand_backend
+
+    # 2. Check relative to project root
+    cand_root = os.path.abspath(os.path.join(PROJECT_ROOT, raw))
+    if os.path.isfile(cand_root):
+        return cand_root
+
+    # 3. Check relative to models directory
+    cand_models = os.path.abspath(os.path.join(MODELS_DIR, raw))
+    if os.path.isfile(cand_models):
+        return cand_models
+
+    # 4. If file is not yet on disk, derive the canonical intended absolute path
+    norm = raw.replace("\\", "/")
+    if norm.startswith("../models/") or norm.startswith("../"):
+        return os.path.abspath(os.path.join(BACKEND_DIR, raw))
+    elif norm.startswith("models/"):
+        return os.path.abspath(os.path.join(PROJECT_ROOT, raw))
+    else:
+        return os.path.abspath(os.path.join(MODELS_DIR, raw))
+
 
 class Settings(BaseSettings):
     API_HOST: str = "0.0.0.0"
@@ -40,10 +96,16 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 480  # 8 hours shift length
     
     # AI Model Path (Kept strictly outside frontend)
-    YOLO_MODEL_PATH: str = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "../../../models/yolov8n-traffic.pt")
+    YOLO_MODEL_PATH: str = Field(
+        default=DEFAULT_YOLO_MODEL_PATH,
+        description="Path to local YOLO model weights (*.pt)",
     )
     INFERENCE_CONFIDENCE_THRESHOLD: float = 0.50
+
+    @field_validator("YOLO_MODEL_PATH", mode="after")
+    @classmethod
+    def _validate_model_path(cls, v: str) -> str:
+        return resolve_model_path(v)
 
     # Roboflow Hosted Inference Configuration
     ROBOFLOW_API_KEY: Optional[str] = Field(

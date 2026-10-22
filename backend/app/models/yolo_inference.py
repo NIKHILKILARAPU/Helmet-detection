@@ -15,7 +15,7 @@ import logging
 from typing import Dict, Any, List, Optional, Union, Tuple
 import numpy as np
 
-from app.config import settings
+from app.config import settings, resolve_model_path, MODELS_DIR, DEFAULT_YOLO_MODEL_PATH
 from app.core.exceptions import ModelNotAvailableError
 
 logger = logging.getLogger("trafficguard.yolo")
@@ -83,6 +83,7 @@ class YoloInferenceEngine:
         confidence_threshold: Optional[float] = None,
     ) -> None:
         self.model_path = model_path or settings.YOLO_MODEL_PATH
+        self.resolved_model_path = resolve_model_path(self.model_path)
         self.confidence_threshold = (
             confidence_threshold
             if confidence_threshold is not None
@@ -96,10 +97,11 @@ class YoloInferenceEngine:
 
     def _load_model(self) -> None:
         """Attempts to load weights once if present on disk."""
-        if not self.model_path or not os.path.isfile(self.model_path):
+        target_path = self.resolved_model_path
+        if not target_path or not os.path.isfile(target_path):
             self.model = None
             self._load_error = (
-                f"Model weights file not found at '{self.model_path}'. "
+                f"Model weights file not found at '{target_path}'. "
                 f"Please ensure trained traffic/helmet detection weights (*.pt) are placed in the models directory."
             )
             self.supported_classes = {}
@@ -107,11 +109,22 @@ class YoloInferenceEngine:
             logger.warning(self._load_error)
             return
 
+        if os.path.getsize(target_path) == 0:
+            self.model = None
+            self._load_error = (
+                f"Model weights file at '{target_path}' is empty (0 bytes). "
+                f"Please ensure valid trained traffic/helmet detection weights (*.pt) are placed in the models directory."
+            )
+            self.supported_classes = {}
+            self.helmet_classification_supported = False
+            logger.error(self._load_error)
+            return
+
         try:
             from ultralytics import YOLO
 
-            logger.info(f"Loading YOLO weights from: {self.model_path}")
-            loaded = YOLO(self.model_path)
+            logger.info(f"Loading YOLO weights from: {target_path}")
+            loaded = YOLO(target_path)
             self.model = loaded
             self._load_error = None
             self._inspect_model_classes()
@@ -121,10 +134,20 @@ class YoloInferenceEngine:
             )
         except Exception as exc:
             self.model = None
-            self._load_error = f"Failed to initialize YOLO model from '{self.model_path}': {str(exc)}"
+            self._load_error = f"Failed to initialize YOLO model from '{target_path}': {str(exc)}"
             self.supported_classes = {}
             self.helmet_classification_supported = False
             logger.error(self._load_error)
+
+    def reload(self, model_path: Optional[str] = None) -> bool:
+        """Reloads model weights from disk (supports dynamically changing or reloading weights)."""
+        if model_path is not None:
+            self.model_path = model_path
+            self.resolved_model_path = resolve_model_path(model_path)
+        else:
+            self.resolved_model_path = resolve_model_path(self.model_path)
+        self._load_model()
+        return self.is_model_loaded()
 
     def _inspect_model_classes(self) -> None:
         """Analyzes class taxonomy of the loaded model."""
@@ -154,15 +177,30 @@ class YoloInferenceEngine:
 
     def get_model_info(self) -> Dict[str, Any]:
         """Returns structured metadata about model state, path, and supported classes."""
+        target_path = self.resolved_model_path
+        file_exists = bool(target_path and os.path.isfile(target_path))
+        file_size = os.path.getsize(target_path) if file_exists else None
+        class_names = [self.supported_classes[k] for k in sorted(self.supported_classes.keys())]
         return {
+            "provider": "local",
             "isLoaded": self.is_model_loaded(),
             "modelPath": self.model_path,
+            "resolvedPath": target_path,
+            "fileExists": file_exists,
+            "fileSizeBytes": file_size,
             "classesCount": len(self.supported_classes),
             "classes": self.supported_classes,
+            "classNames": class_names,
             "helmetClassificationSupported": self.helmet_classification_supported,
             "confidenceThreshold": self.confidence_threshold,
             "loadError": self._load_error,
+            "errorMessage": self._load_error,
             "expectedClasses": EXPECTED_TRAFFIC_CLASSES,
+            "legitimateSource": (
+                "TrafficGuard fine-tuned traffic safety weights (*.pt) containing classes: "
+                f"{', '.join(EXPECTED_TRAFFIC_CLASSES)}"
+            ),
+            "destinationPath": target_path,
         }
 
     def set_model(self, model_instance: Any, supported_classes: Optional[Dict[int, str]] = None) -> None:
@@ -238,11 +276,11 @@ class YoloInferenceEngine:
         if not self.is_model_loaded():
             raise ModelNotAvailableError(
                 message=(
-                    f"AI model weights not found at '{self.model_path}'. "
+                    f"AI model weights not found at '{self.resolved_model_path}'. "
                     f"Real detection cannot run without trained weights. "
                     f"Please place 'yolov8n-traffic.pt' in the models directory."
                 ),
-                expected_path=self.model_path,
+                expected_path=self.resolved_model_path,
                 expected_classes=EXPECTED_TRAFFIC_CLASSES,
             )
 

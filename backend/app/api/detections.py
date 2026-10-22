@@ -1007,12 +1007,25 @@ async def analyze_frame(
 async def get_model_status():
     """
     Returns live information about the active AI model (Roboflow or local YOLO),
-    configuration verification, and whether helmet violation classes are supported.
+    configuration verification, resolved weights path, file existence, and whether helmet violation classes are supported.
     """
     provider = (settings.INFERENCE_PROVIDER or "roboflow").lower()
-    info = roboflow_engine.get_model_info() if provider == "roboflow" else yolo_engine.get_model_info()
+    local_info = yolo_engine.get_model_info()
+    roboflow_info = roboflow_engine.get_model_info()
+
+    active_info = roboflow_info if provider == "roboflow" else local_info
+    
+    # Combined response with active provider info at root and both sub-engines
+    combined_data = {
+        **active_info,
+        "activeProvider": provider,
+        "diagnostics": {
+            "localYolo": local_info,
+            "roboflow": roboflow_info,
+        },
+    }
     return ApiResponse(
         success=True,
-        data=info,
-        message=f"Active AI model status retrieved ({info.get('provider', 'local')}).",
+        data=combined_data,
+        message=f"Active AI model status retrieved ({provider}).",
     )

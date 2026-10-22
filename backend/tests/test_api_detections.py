@@ -2889,6 +2889,164 @@ class TestCyclistExclusionAndVehicleClassificationPipeline:
         assert db[COLLECTION_VIOLATIONS].count_documents({"cameraId": self.camera_oid}) == 0
 
 
+class TestYoloModelWeightsAndDiagnostics:
+    """
+    Tests covering YOLO model weights lifecycle, path resolution, diagnostics,
+    missing weights (HTTP 503), invalid weights, and verified class compatibility.
+    """
+
+    def test_resolve_model_path_canonical_handling(self):
+        """Centrally derives canonical absolute paths for default, relative, and named weights."""
+        from app.config import resolve_model_path, MODELS_DIR, BACKEND_DIR, PROJECT_ROOT
+
+        # 1. Default fallback resolves to models/yolov8n-traffic.pt
+        default_path = resolve_model_path()
+        assert default_path == os.path.join(MODELS_DIR, "yolov8n-traffic.pt")
+        assert os.path.isabs(default_path)
+
+        # 2. Relative '../models/yolov8n-traffic.pt' derived from backend dir
+        rel_dotdot = resolve_model_path("../models/yolov8n-traffic.pt")
+        assert rel_dotdot == os.path.join(MODELS_DIR, "yolov8n-traffic.pt")
+
+        # 3. Relative 'models/yolov8n-traffic.pt' derived from project root
+        rel_models = resolve_model_path("models/yolov8n-traffic.pt")
+        assert rel_models == os.path.join(MODELS_DIR, "yolov8n-traffic.pt")
+
+        # 4. Bare filename 'yolov8n.pt' finds the existing weights file
+        yolo_pt = resolve_model_path("yolov8n.pt")
+        assert os.path.isfile(yolo_pt)
+        assert os.path.isabs(yolo_pt)
+
+        # 5. Explicit absolute path is preserved
+        abs_sample = os.path.abspath("backend/yolov8n.pt")
+        assert resolve_model_path(abs_sample) == abs_sample
+
+    def test_missing_weights_diagnostics_and_unavailable(self):
+        """When model weights file is absent, diagnostics accurately report missing file and detect() raises 503."""
+        from app.models.yolo_inference import YoloInferenceEngine
+        from app.core.exceptions import ModelNotAvailableError
+
+        missing_path = "non_existent_weights_fixture_999.pt"
+        engine = YoloInferenceEngine(model_path=missing_path)
+
+        assert engine.is_model_loaded() is False
+        info = engine.get_model_info()
+
+        assert info["isLoaded"] is False
+        assert info["fileExists"] is False
+        assert info["fileSizeBytes"] is None
+        assert info["classesCount"] == 0
+        assert info["loadError"] is not None
+        assert "not found" in info["loadError"].lower()
+        assert info["errorMessage"] == info["loadError"]
+        assert info["helmetClassificationSupported"] is False
+
+        # Attempting inference raises ModelNotAvailableError
+        dummy_img = np.zeros((480, 640, 3), dtype=np.uint8)
+        with pytest.raises(ModelNotAvailableError) as exc_info:
+            engine.detect(dummy_img)
+
+        assert exc_info.value.status_code == 503
+        assert exc_info.value.error_code == "MODEL_NOT_AVAILABLE"
+        assert "yolov8n-traffic.pt" in exc_info.value.message
+
+    def test_invalid_corrupted_weights_handling(self, tmp_path):
+        """When weights file exists but is corrupted or not a valid PyTorch model, reports load failure."""
+        from app.models.yolo_inference import YoloInferenceEngine
+        from app.core.exceptions import ModelNotAvailableError
+
+        corrupt_file = tmp_path / "corrupt_weights.pt"
+        corrupt_file.write_bytes(b"CORRUPTED_NON_PYTORCH_DATA_123456789")
+
+        engine = YoloInferenceEngine(model_path=str(corrupt_file))
+        assert engine.is_model_loaded() is False
+
+        info = engine.get_model_info()
+        assert info["fileExists"] is True
+        assert info["isLoaded"] is False
+        assert info["fileSizeBytes"] == len(b"CORRUPTED_NON_PYTORCH_DATA_123456789")
+        assert info["loadError"] is not None
+        assert "Failed to initialize YOLO model" in info["loadError"]
+
+        dummy_img = np.zeros((480, 640, 3), dtype=np.uint8)
+        with pytest.raises(ModelNotAvailableError) as exc_info:
+            engine.detect(dummy_img)
+        assert exc_info.value.status_code == 503
+
+    def test_valid_coco_weights_loaded_without_falsifying_helmet_classes(self):
+        """Verifies real backend/yolov8n.pt: 80 COCO classes, no helmet violation false claims."""
+        from app.models.yolo_inference import YoloInferenceEngine
+        from app.config import BACKEND_DIR
+
+        real_pt = os.path.join(BACKEND_DIR, "yolov8n.pt")
+        if not os.path.isfile(real_pt):
+            pytest.skip("backend/yolov8n.pt not present on test machine")
+
+        engine = YoloInferenceEngine(model_path=real_pt)
+        assert engine.is_model_loaded() is True
+
+        info = engine.get_model_info()
+        assert info["fileExists"] is True
+        assert info["isLoaded"] is True
+        assert info["classesCount"] == 80
+        assert "person" in info["classNames"]
+        assert "motorcycle" in info["classNames"]
+        assert "bicycle" in info["classNames"]
+        assert info["loadError"] is None
+
+        # COCO model does NOT have helmet violation classes
+        assert info["helmetClassificationSupported"] is False
+
+        # Running inference returns valid structure with helmetClassificationAvailable=False
+        dummy_img = np.zeros((480, 640, 3), dtype=np.uint8)
+        det_res = engine.detect(dummy_img)
+        assert det_res["helmetClassificationAvailable"] is False
+        assert det_res["isCandidateViolation"] is False
+        assert "COCO" in det_res["helmetClassificationMessage"] or "standard" in det_res["helmetClassificationMessage"].lower()
+
+    def test_valid_traffic_weights_with_helmet_classes_supported(self):
+        """When loaded model has helmet classes, helmetClassificationSupported evaluates to True."""
+        from app.models.yolo_inference import YoloInferenceEngine
+        from unittest.mock import MagicMock
+
+        engine = YoloInferenceEngine(model_path="non_existent.pt")
+        mock_traffic_model = MagicMock()
+        mock_traffic_model.names = {
+            0: "helmet",
+            1: "no_helmet",
+            2: "motorcycle",
+            3: "rider",
+        }
+        engine.set_model(mock_traffic_model)
+
+        assert engine.is_model_loaded() is True
+        assert engine.helmet_classification_supported is True
+        info = engine.get_model_info()
+        assert info["helmetClassificationSupported"] is True
+        assert info["classesCount"] == 4
+        assert "helmet" in info["classNames"]
+        assert "no_helmet" in info["classNames"]
+
+    def test_api_model_status_endpoint_diagnostics(self):
+        """GET /api/v1/detections/model-status returns rich diagnostics for active provider and local YOLO."""
+        resp = client.get(f"{settings.API_PREFIX}/detections/model-status")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is True
+        payload = data["data"]
+
+        assert "activeProvider" in payload
+        assert "diagnostics" in payload
+        assert "localYolo" in payload["diagnostics"]
+        local_diag = payload["diagnostics"]["localYolo"]
+        assert "resolvedPath" in local_diag
+        assert "fileExists" in local_diag
+        assert "isLoaded" in local_diag
+        assert "classesCount" in local_diag
+        assert "classNames" in local_diag
+        assert os.path.isabs(local_diag["resolvedPath"])
+
+
 
 
 

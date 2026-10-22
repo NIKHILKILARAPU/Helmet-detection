@@ -176,14 +176,18 @@ class VehicleClassifier:
         try:
             import os
             from ultralytics import YOLO
+            from app.config import BACKEND_DIR, PROJECT_ROOT, MODELS_DIR, resolve_model_path
             candidate_paths = [
+                os.path.join(BACKEND_DIR, "yolov8n.pt"),
+                os.path.join(MODELS_DIR, "yolov8n.pt"),
+                os.path.join(PROJECT_ROOT, "yolov8n.pt"),
+                os.path.join(MODELS_DIR, "yolov8n-traffic.pt"),
+                resolve_model_path("yolov8n.pt"),
+                resolve_model_path("yolov8n-traffic.pt"),
                 "yolov8n.pt",
-                os.path.join(os.path.dirname(__file__), "../../../yolov8n.pt"),
-                os.path.join(os.path.dirname(__file__), "../../../models/yolov8n.pt"),
-                os.path.join(os.path.dirname(__file__), "../../../models/yolov8n-traffic.pt"),
             ]
             for p in candidate_paths:
-                if os.path.isfile(p):
+                if p and os.path.isfile(p):
                     self._custom_detector = YOLO(p)
                     break
         except Exception:
